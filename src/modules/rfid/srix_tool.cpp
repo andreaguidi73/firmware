@@ -1,6 +1,6 @@
 /**
  * @file srix_tool.cpp
- * @brief SRIX4K/SRIX512 Reader/Writer Tool v1.2
+ * @brief SRIX4K/SRIX512 Reader/Writer Tool v1.3 - FIXED MyKey
  * @author Senape3000
  * @info https://github.com/Senape3000/firmware/blob/main/docs_custom/SRIX/SRIX_Tool_README.md
  * @date 2026-01-01
@@ -914,34 +914,59 @@ uint64_t SRIXTool::getUidAsUint64() {
     return uid;
 }
 
+// Helper: Read a block as uint32_t
+uint32_t SRIXTool::readBlockAsUint32(uint8_t blockNum) {
+    uint32_t *block = getBlockPtr(blockNum);
+    if (!block) return 0;
+    return *block;
+}
+
+// Helper: Write a uint32_t to a block
+void SRIXTool::writeBlockAsUint32(uint8_t blockNum, uint32_t value) {
+    uint32_t *block = getBlockPtr(blockNum);
+    if (block) {
+        *block = value;
+    }
+}
+
 // Cryptographic function: XOR-based bit swapping for obfuscation
 void SRIXTool::encodeDecodeBlock(uint32_t *block) {
     if (!block) return;
     
-    *block ^= (*block & 0x00C00000) << 6 | (*block & 0x0000C000) << 12 | (*block & 0x000000C0) << 18 |
-              (*block & 0x000C0000) >> 6 | (*block & 0x00030000) >> 12 | (*block & 0x00000300) >> 6;
-    *block ^= (*block & 0x30000000) >> 6 | (*block & 0x0C000000) >> 12 | (*block & 0x03000000) >> 18 |
-              (*block & 0x00003000) << 6 | (*block & 0x00000030) << 12 | (*block & 0x0000000C) << 6;
-    *block ^= (*block & 0x00C00000) << 6 | (*block & 0x0000C000) << 12 | (*block & 0x000000C0) << 18 |
-              (*block & 0x000C0000) >> 6 | (*block & 0x00030000) >> 12 | (*block & 0x00000300) >> 6;
+    uint32_t val = *block;
+    
+    // First transformation
+    val ^= ((val & 0x00C00000) << 6) | ((val & 0x0000C000) << 12) | ((val & 0x000000C0) << 18) |
+           ((val & 0x000C0000) >> 6) | ((val & 0x00030000) >> 12) | ((val & 0x00000300) >> 6);
+    
+    // Second transformation
+    val ^= ((val & 0x30000000) >> 6) | ((val & 0x0C000000) >> 12) | ((val & 0x03000000) >> 18) |
+           ((val & 0x00003000) << 6) | ((val & 0x00000030) << 12) | ((val & 0x0000000C) << 6);
+    
+    // Third transformation
+    val ^= ((val & 0x00C00000) << 6) | ((val & 0x0000C000) << 12) | ((val & 0x000000C0) << 18) |
+           ((val & 0x000C0000) >> 6) | ((val & 0x00030000) >> 12) | ((val & 0x00000300) >> 6);
+    
+    *block = val;
 }
 
-// Calculate block checksum: 0xFF - blockNum - sum of all nibbles
-uint8_t SRIXTool::calculateBlockChecksum(uint32_t *block, uint8_t blockNum) {
-    if (!block) return 0;
+// Calculate block checksum: 0xFF - blockNum - sum of all nibbles, store in block's lowest byte
+void SRIXTool::calculateBlockChecksum(uint32_t *block, uint8_t blockNum) {
+    if (!block) return;
     
     uint8_t sum = 0;
-    uint32_t data = *block;
+    uint32_t data = *block & 0xFFFFFF00; // Clear lowest byte for checksum
     
-    // Sum all 8 nibbles (4 bits each)
-    for (int i = 0; i < 8; i++) {
+    // Sum all 8 nibbles (4 bits each) from the upper 3 bytes
+    for (int i = 1; i < 8; i++) {
         sum += (data >> (i * 4)) & 0x0F;
     }
     
-    return 0xFF - blockNum - sum;
+    uint8_t checksum = 0xFF - blockNum - sum;
+    *block = data | checksum; // Store checksum in lowest byte
 }
 
-// Calculate encryption key: SK = UID × Vendor × OTP
+// Calculate encryption key: SK = (UID × Vendor × OTP) & 0xFFFFFFFF (32-bit truncation)
 void SRIXTool::calculateEncryptionKey() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) {
         _encryptionKey = 0;
@@ -950,40 +975,32 @@ void SRIXTool::calculateEncryptionKey() {
     }
     
     // Get OTP from block 0x06
-    uint32_t *block6 = getBlockPtr(0x06);
-    if (!block6) {
+    uint32_t otp = readBlockAsUint32(0x06);
+    if (otp == 0) {
         _encryptionKey = 0;
         _vendorCalculated = false;
         return;
     }
     
     // OTP calculation with byte swap and two's complement
-    uint32_t otp = ~(*block6 << 24 | (*block6 & 0x0000FF00) << 8 |
-                     (*block6 & 0x00FF0000) >> 8 | *block6 >> 24) + 1;
+    otp = ~((otp << 24) | ((otp & 0x0000FF00) << 8) |
+            ((otp & 0x00FF0000) >> 8) | (otp >> 24)) + 1;
     
-    // Decode vendor blocks temporarily
-    uint32_t *block18 = getBlockPtr(0x18);
-    uint32_t *block19 = getBlockPtr(0x19);
+    // Read and decode vendor blocks temporarily
+    uint32_t block18 = readBlockAsUint32(0x18);
+    uint32_t block19 = readBlockAsUint32(0x19);
     
-    if (!block18 || !block19) {
-        _encryptionKey = 0;
-        _vendorCalculated = false;
-        return;
-    }
+    encodeDecodeBlock(&block18);
+    encodeDecodeBlock(&block19);
     
-    encodeDecodeBlock(block18);
-    encodeDecodeBlock(block19);
+    // Extract vendor (stored as vendor - 1)
+    uint32_t vendor = ((block18 << 16) | (block19 & 0x0000FFFF)) + 1;
+    _currentVendor = vendor - 1;
     
-    // Extract vendor
-    uint32_t vendor = (*block18 << 16 | (*block19 & 0x0000FFFF)) + 1;
-    _currentVendor = vendor - 1; // Store original vendor
-    
-    // Re-encode blocks
-    encodeDecodeBlock(block18);
-    encodeDecodeBlock(block19);
-    
-    // Calculate encryption key
-    _encryptionKey = getUidAsUint64() * vendor * otp;
+    // Calculate encryption key (truncated to 32-bit)
+    uint64_t uid = getUidAsUint64();
+    uint64_t key64 = uid * vendor * otp;
+    _encryptionKey = (uint32_t)(key64 & 0xFFFFFFFF);
     _vendorCalculated = true;
 }
 
@@ -991,29 +1008,24 @@ void SRIXTool::calculateEncryptionKey() {
 void SRIXTool::importVendor(uint32_t vendor) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return;
     
-    uint32_t *block18 = getBlockPtr(0x18);
-    uint32_t *block19 = getBlockPtr(0x19);
-    uint32_t *block1C = getBlockPtr(0x1C);
-    uint32_t *block1D = getBlockPtr(0x1D);
-    
-    if (!block18 || !block19 || !block1C || !block1D) return;
-    
     // Vendor is stored as (vendor - 1)
-    // Block 0x18 contains upper 16 bits in its lower word (as a 32-bit value)
-    // Block 0x19 contains lower 16 bits in its lower word
     uint32_t vendorMinusOne = vendor - 1;
     
-    // Set unencoded values
-    *block18 = (vendorMinusOne >> 16);  // Upper 16 bits as a 32-bit value
-    *block19 = (vendorMinusOne & 0xFFFF);  // Lower 16 bits as a 32-bit value
+    // Prepare blocks with vendor data
+    uint32_t block18 = (vendorMinusOne >> 16);  // Upper 16 bits
+    uint32_t block19 = (vendorMinusOne & 0xFFFF);  // Lower 16 bits
     
     // Encode for storage
-    encodeDecodeBlock(block18);
-    encodeDecodeBlock(block19);
+    encodeDecodeBlock(&block18);
+    encodeDecodeBlock(&block19);
     
-    // Set backup vendor (blocks 0x1C, 0x1D) - same as primary encoded values
-    *block1C = *block18;
-    *block1D = *block19;
+    // Write primary vendor (blocks 0x18, 0x19)
+    writeBlockAsUint32(0x18, block18);
+    writeBlockAsUint32(0x19, block19);
+    
+    // Write backup vendor (blocks 0x1C, 0x1D)
+    writeBlockAsUint32(0x1C, block18);
+    writeBlockAsUint32(0x1D, block19);
     
     _currentVendor = vendor;
     _vendorCalculated = false;
@@ -1027,55 +1039,60 @@ void SRIXTool::exportVendor(uint32_t *vendor) {
         return;
     }
     
-    uint32_t *block18 = getBlockPtr(0x18);
-    uint32_t *block19 = getBlockPtr(0x19);
-    
-    if (!block18 || !block19) {
-        *vendor = 0;
-        return;
-    }
+    // Read blocks (don't modify originals)
+    uint32_t block18 = readBlockAsUint32(0x18);
+    uint32_t block19 = readBlockAsUint32(0x19);
     
     // Decode to read
-    encodeDecodeBlock(block18);
-    encodeDecodeBlock(block19);
+    encodeDecodeBlock(&block18);
+    encodeDecodeBlock(&block19);
     
-    // Extract vendor
-    *vendor = (*block18 << 16 | (*block19 & 0x0000FFFF)) + 1;
-    
-    // Re-encode
-    encodeDecodeBlock(block18);
-    encodeDecodeBlock(block19);
+    // Extract vendor (stored as vendor - 1)
+    *vendor = ((block18 << 16) | (block19 & 0x0000FFFF)) + 1;
 }
 
 // Check if key is in factory reset state
 bool SRIXTool::isReset() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
-    uint32_t *block18 = getBlockPtr(0x18);
-    uint32_t *block19 = getBlockPtr(0x19);
+    uint32_t block18 = readBlockAsUint32(0x18);
+    uint32_t block19 = readBlockAsUint32(0x19);
     
-    if (!block18 || !block19) return false;
-    
-    // Factory reset values
+    // Factory reset values (already encoded)
     const uint32_t block18Reset = 0x8FCD0F48;
     const uint32_t block19Reset = 0xC0820007;
     
-    return (*block18 == block18Reset && *block19 == block19Reset);
+    return (block18 == block18Reset && block19 == block19Reset);
 }
 
 // Get current credit from block 0x21
 uint16_t SRIXTool::getCurrentCredit() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
-    uint32_t *block21 = getBlockPtr(0x21);
-    if (!block21) return 0;
+    uint32_t block21 = readBlockAsUint32(0x21);
+    if (block21 == 0) return 0;
     
     // Decode block
-    uint32_t decoded = *block21;
-    encodeDecodeBlock(&decoded);
+    encodeDecodeBlock(&block21);
     
-    // Extract credit (stored in cents)
-    uint16_t credit = (decoded >> 16) & 0xFFFF;
+    // Extract credit from upper 16 bits
+    uint16_t credit = (block21 >> 16) & 0xFFFF;
+    
+    return credit;
+}
+
+// Get previous credit from block 0x25
+uint16_t SRIXTool::getPreviousCredit() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
+    
+    uint32_t block25 = readBlockAsUint32(0x25);
+    if (block25 == 0) return 0;
+    
+    // Decode block
+    encodeDecodeBlock(&block25);
+    
+    // Extract credit from upper 16 bits
+    uint16_t credit = (block25 >> 16) & 0xFFFF;
     
     return credit;
 }
@@ -1090,33 +1107,22 @@ bool SRIXTool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year
     // Calculate new credit
     uint16_t newCredit = currentCredit + cents;
     
-    // Update block 0x21 with new credit
-    uint32_t *block21 = getBlockPtr(0x21);
-    if (!block21) return false;
+    // Prepare new block data: upper 16 bits = credit, lower 16 bits = date
+    uint32_t newBlock = ((uint32_t)newCredit << 16) | (daysDifference(day, month, year) & 0xFFFF);
     
-    // Prepare new block data
-    uint32_t newBlock = (newCredit << 16) | (daysDifference(day, month, year) & 0xFFFF);
-    
-    // Encode block
+    // Encode and write to block 0x21
     encodeDecodeBlock(&newBlock);
-    *block21 = newBlock;
+    writeBlockAsUint32(0x21, newBlock);
     
-    // Update transaction pointer (block 0x3C)
+    // Update transaction history (blocks 0x34-0x3B)
     uint8_t txOffset = getCurrentTransactionOffset();
     if (txOffset < 8) {
-        // Add transaction to history (blocks 0x34-0x3B)
-        uint32_t *txBlock = getBlockPtr(0x34 + txOffset);
-        if (txBlock) {
-            uint32_t txData = (cents << 16) | (daysDifference(day, month, year) & 0xFFFF);
-            encodeDecodeBlock(&txData);
-            *txBlock = txData;
-            
-            // Increment transaction offset
-            uint32_t *block3C = getBlockPtr(0x3C);
-            if (block3C) {
-                *block3C = (txOffset + 1) % 8;
-            }
-        }
+        uint32_t txData = ((uint32_t)cents << 16) | (daysDifference(day, month, year) & 0xFFFF);
+        encodeDecodeBlock(&txData);
+        writeBlockAsUint32(0x34 + txOffset, txData);
+        
+        // Increment transaction pointer (block 0x3C)
+        writeBlockAsUint32(0x3C, (txOffset + 1) % 8);
     }
     
     return true;
@@ -1127,12 +1133,9 @@ bool SRIXTool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
     // Reset credit to 0
-    uint32_t *block21 = getBlockPtr(0x21);
-    if (!block21) return false;
-    
     uint32_t newBlock = (0 << 16) | (daysDifference(day, month, year) & 0xFFFF);
     encodeDecodeBlock(&newBlock);
-    *block21 = newBlock;
+    writeBlockAsUint32(0x21, newBlock);
     
     // Add the desired amount
     return addCents(cents, day, month, year);
@@ -1142,11 +1145,10 @@ bool SRIXTool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year
 bool SRIXTool::checkLockID() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
-    uint32_t *block05 = getBlockPtr(0x05);
-    if (!block05) return false;
+    uint32_t block05 = readBlockAsUint32(0x05);
     
     // Check if first byte is 0x7F (locked)
-    uint8_t lockByte = (*block05 >> 24) & 0xFF;
+    uint8_t lockByte = (block05 >> 24) & 0xFF;
     return (lockByte == 0x7F);
 }
 
@@ -1154,10 +1156,9 @@ bool SRIXTool::checkLockID() {
 uint8_t SRIXTool::getCurrentTransactionOffset() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
-    uint32_t *block3C = getBlockPtr(0x3C);
-    if (!block3C) return 0;
+    uint32_t block3C = readBlockAsUint32(0x3C);
     
-    return (*block3C) & 0x07; // Only use lower 3 bits (0-7)
+    return block3C & 0x07; // Only use lower 3 bits (0-7)
 }
 
 // Calculate days from 1/1/1995
@@ -1195,41 +1196,29 @@ uint16_t SRIXTool::daysDifference(uint8_t day, uint8_t month, uint16_t year) {
 bool SRIXTool::resetKey() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
-    // Factory reset values for vendor blocks
+    // Factory reset values for vendor blocks (already encoded)
     const uint32_t block18Reset = 0x8FCD0F48;
     const uint32_t block19Reset = 0xC0820007;
     
-    uint32_t *block18 = getBlockPtr(0x18);
-    uint32_t *block19 = getBlockPtr(0x19);
-    uint32_t *block1C = getBlockPtr(0x1C);
-    uint32_t *block1D = getBlockPtr(0x1D);
-    
-    if (!block18 || !block19 || !block1C || !block1D) return false;
-    
     // Reset primary vendor
-    *block18 = block18Reset;
-    *block19 = block19Reset;
+    writeBlockAsUint32(0x18, block18Reset);
+    writeBlockAsUint32(0x19, block19Reset);
     
     // Reset backup vendor
-    *block1C = block18Reset;
-    *block1D = block19Reset;
+    writeBlockAsUint32(0x1C, block18Reset);
+    writeBlockAsUint32(0x1D, block19Reset);
     
     // Reset credit blocks
-    uint32_t *block21 = getBlockPtr(0x21);
-    uint32_t *block25 = getBlockPtr(0x25);
-    
-    if (block21) *block21 = 0;
-    if (block25) *block25 = 0;
+    writeBlockAsUint32(0x21, 0);
+    writeBlockAsUint32(0x25, 0);
     
     // Reset transaction history
     for (uint8_t i = 0x34; i <= 0x3B; i++) {
-        uint32_t *txBlock = getBlockPtr(i);
-        if (txBlock) *txBlock = 0;
+        writeBlockAsUint32(i, 0);
     }
     
     // Reset transaction pointer
-    uint32_t *block3C = getBlockPtr(0x3C);
-    if (block3C) *block3C = 0;
+    writeBlockAsUint32(0x3C, 0);
     
     _currentVendor = 0;
     _vendorCalculated = false;

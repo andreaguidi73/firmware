@@ -1,6 +1,6 @@
 /**
  * @file srix_tool.cpp
- * @brief SRIX4K/SRIX512 Reader/Writer Tool v1.2
+ * @brief SRIX4K/SRIX512 Reader/Writer Tool v1.3 - FIXED MyKey
  * @author Senape3000
  * @info https://github.com/Senape3000/firmware/blob/main/docs_custom/SRIX/SRIX_Tool_README.md
  * @date 2026-01-01
@@ -36,13 +36,13 @@ public:
 
 private:
     // MyKey functionality - encryption and state
-    uint64_t _encryptionKey;
+    uint32_t _encryptionKey;
     uint32_t _currentVendor;
     bool _vendorCalculated;
     
     // MyKey - Cryptographic functions
     void encodeDecodeBlock(uint32_t *block);
-    uint8_t calculateBlockChecksum(uint32_t *block, uint8_t blockNum);
+    void calculateBlockChecksum(uint32_t *block, uint8_t blockNum);
     void calculateEncryptionKey();
     
     // MyKey - Vendor management
@@ -52,6 +52,7 @@ private:
     
     // MyKey - Credit management
     uint16_t getCurrentCredit();
+    uint16_t getPreviousCredit();
     bool addCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year);
     bool setCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year);
     
@@ -74,6 +75,10 @@ private:
     // Helper to get block pointer
     uint32_t* getBlockPtr(uint8_t blockNum);
     uint64_t getUidAsUint64();
+    
+    // MyKey - Block read/write helpers
+    uint32_t readBlockAsUint32(uint8_t blockNum);
+    void writeBlockAsUint32(uint8_t blockNum, uint32_t value);
     
 private:
 // PN532 for SRIX - uses IRQ/RST if board has them defined
