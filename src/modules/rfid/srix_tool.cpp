@@ -845,6 +845,59 @@ void SRIXTool::delayWithReturn(uint32_t ms) {
 // ============================================================================
 // MyKey Functionality Implementation
 // ============================================================================
+//
+// This implementation provides complete SRIX4K MyKey card management based on
+// the MIKAI/MyKey library functionality. The MyKey system is used for storing
+// vendor codes, credit balances, and transaction history on SRIX4K cards.
+//
+// KEY CONCEPTS:
+// 1. Vendor Code: A 32-bit identifier stored in blocks 0x18-0x19 (primary)
+//    and 0x1C-0x1D (backup). The vendor is stored as (vendor - 1) and
+//    encoded using the encodeDecodeBlock algorithm.
+//
+// 2. Encryption Key: SK = UID × Vendor × OTP
+//    - UID: 64-bit unique identifier from the card
+//    - Vendor: 32-bit vendor code (decoded from blocks 0x18-0x19)
+//    - OTP: One-Time Programmable value from block 0x06 (byte-swapped and two's complement)
+//
+// 3. Credit Storage: Credits are stored in cents in block 0x21 (current) and
+//    block 0x25 (previous). The block format is:
+//    - Upper 16 bits: credit amount in cents
+//    - Lower 16 bits: date stamp (days since 1/1/1995)
+//
+// 4. Transaction History: Up to 8 transactions stored in blocks 0x34-0x3B
+//    with a circular buffer pointer in block 0x3C.
+//
+// 5. Security: Lock ID in block 0x05 (0x7F = locked) protects against
+//    unauthorized modifications.
+//
+// BLOCK LAYOUT:
+// 0x05: Lock ID (byte 0 = 0x7F indicates locked)
+// 0x06: OTP (One Time Programmable value)
+// 0x07: Key ID
+// 0x08: Production date (BCD format)
+// 0x18-0x19: Primary vendor code (encoded)
+// 0x1C-0x1D: Backup vendor code (encoded)
+// 0x21: Current credit + date (encoded)
+// 0x25: Previous credit + date (encoded)
+// 0x23, 0x27: Previous credit blocks
+// 0x34-0x3B: Transaction history (8 slots)
+// 0x3C: Transaction pointer (0-7)
+//
+// FACTORY RESET VALUES:
+// block18Reset = 0x8FCD0F48
+// block19Reset = 0xC0820007
+//
+// USAGE:
+// 1. Read a tag using "Read tag" option
+// 2. Access MyKey functions from the menu (visible only when dump is loaded)
+// 3. Use "MyKey Info" to view vendor, credit, and status
+// 4. Use "Add Credit" / "Set Credit" to manage card balance
+// 5. Use "Import Vendor" / "Export Vendor" to manage vendor codes
+// 6. Use "Reset Key" to restore factory defaults
+// 7. Write modified dump back to card using "Clone tag"
+//
+// ============================================================================
 
 // Helper: Get pointer to a block in the dump
 uint32_t* SRIXTool::getBlockPtr(uint8_t blockNum) {
@@ -1396,7 +1449,6 @@ void SRIXTool::reset_key_ui() {
         displayError("No data in memory!");
         displayError("Read or load a tag first.");
         delay(2000);
-        set_state(IDLE_MODE);
         return;
     }
     
@@ -1412,7 +1464,7 @@ void SRIXTool::reset_key_ui() {
     bool confirmed = false;
     
     options.emplace_back("Confirm Reset", [&confirmed]() { confirmed = true; });
-    options.emplace_back("Cancel", [this]() { set_state(IDLE_MODE); });
+    options.emplace_back("Cancel", []() { /* Do nothing, just return */ });
     
     loopOptions(options);
     
@@ -1430,7 +1482,6 @@ void SRIXTool::reset_key_ui() {
         }
         
         delayWithReturn(3000);
-        set_state(IDLE_MODE);
     }
 }
 
