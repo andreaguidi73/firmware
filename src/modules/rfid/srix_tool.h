@@ -35,6 +35,47 @@ public:
     void loop();
 
 private:
+    // MyKey functionality - encryption and state
+    uint64_t _encryptionKey;
+    uint32_t _currentVendor;
+    bool _vendorCalculated;
+    
+    // MyKey - Cryptographic functions
+    void encodeDecodeBlock(uint32_t *block);
+    uint8_t calculateBlockChecksum(uint32_t *block, uint8_t blockNum);
+    void calculateEncryptionKey();
+    
+    // MyKey - Vendor management
+    void importVendor(uint32_t vendor);
+    void exportVendor(uint32_t *vendor);
+    bool isReset();
+    
+    // MyKey - Credit management
+    uint16_t getCurrentCredit();
+    bool addCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year);
+    bool setCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year);
+    
+    // MyKey - Security and validation
+    bool checkLockID();
+    uint8_t getCurrentTransactionOffset();
+    
+    // MyKey - Utility functions
+    uint16_t daysDifference(uint8_t day, uint8_t month, uint16_t year);
+    bool resetKey();
+    
+    // MyKey - UI functions
+    void show_mykey_info();
+    void add_credit_ui();
+    void set_credit_ui();
+    void import_vendor_ui();
+    void export_vendor_ui();
+    void reset_key_ui();
+    
+    // Helper to get block pointer
+    uint32_t* getBlockPtr(uint8_t blockNum);
+    uint64_t getUidAsUint64();
+    
+private:
 // PN532 for SRIX - uses IRQ/RST if board has them defined
 // Devices such as T-Embed CC1101 have embedded PN532 that needs IRQ and RST pins
 // If using other device, set -DPN532_IRQ=pin_num and -DPN532_RF_REST=pin_num in platformio.ini

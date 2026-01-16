@@ -10,6 +10,7 @@
 #include "core/mykeyboard.h"
 #include "core/settings.h"
 #include <vector>
+#include <time.h>
 
 #define TAG_TIMEOUT_MS 500
 #define TAG_MAX_ATTEMPTS 5
@@ -19,6 +20,9 @@ SRIXTool::SRIXTool() {
     _dump_valid_from_read = false;
     _dump_valid_from_load = false;
     _tag_read = false;
+    _encryptionKey = 0;
+    _currentVendor = 0;
+    _vendorCalculated = false;
     setup();
 }
 
@@ -130,6 +134,16 @@ void SRIXTool::select_state() {
         options.emplace_back(" -Write to tag", [this]() { set_state(WRITE_TAG_MODE); });
     }
     options.emplace_back("PN532 Info", [this]() { set_state(PN_INFO_MODE); });
+    
+    // MyKey functions - only show if we have data in memory
+    if (_dump_valid_from_read || _dump_valid_from_load) {
+        options.emplace_back("MyKey Info", [this]() { show_mykey_info(); });
+        options.emplace_back("Add Credit", [this]() { add_credit_ui(); });
+        options.emplace_back("Set Credit", [this]() { set_credit_ui(); });
+        options.emplace_back("Import Vendor", [this]() { import_vendor_ui(); });
+        options.emplace_back("Export Vendor", [this]() { export_vendor_ui(); });
+        options.emplace_back("Reset Key", [this]() { reset_key_ui(); });
+    }
 
     loopOptions(options);
 }
@@ -826,6 +840,598 @@ void SRIXTool::load_file_data(FS *fs, String filepath) {
 void SRIXTool::delayWithReturn(uint32_t ms) {
     auto tm = millis();
     while (millis() - tm < ms && !returnToMenu) { vTaskDelay(pdMS_TO_TICKS(50)); }
+}
+
+// ============================================================================
+// MyKey Functionality Implementation
+// ============================================================================
+
+// Helper: Get pointer to a block in the dump
+uint32_t* SRIXTool::getBlockPtr(uint8_t blockNum) {
+    if (blockNum >= 128) return nullptr;
+    return (uint32_t*)(&_dump[blockNum * 4]);
+}
+
+// Helper: Get UID as uint64_t
+uint64_t SRIXTool::getUidAsUint64() {
+    uint64_t uid = 0;
+    for (int i = 0; i < 8; i++) {
+        uid = (uid << 8) | _uid[i];
+    }
+    return uid;
+}
+
+// Cryptographic function: XOR-based bit swapping for obfuscation
+void SRIXTool::encodeDecodeBlock(uint32_t *block) {
+    if (!block) return;
+    
+    *block ^= (*block & 0x00C00000) << 6 | (*block & 0x0000C000) << 12 | (*block & 0x000000C0) << 18 |
+              (*block & 0x000C0000) >> 6 | (*block & 0x00030000) >> 12 | (*block & 0x00000300) >> 6;
+    *block ^= (*block & 0x30000000) >> 6 | (*block & 0x0C000000) >> 12 | (*block & 0x03000000) >> 18 |
+              (*block & 0x00003000) << 6 | (*block & 0x00000030) << 12 | (*block & 0x0000000C) << 6;
+    *block ^= (*block & 0x00C00000) << 6 | (*block & 0x0000C000) << 12 | (*block & 0x000000C0) << 18 |
+              (*block & 0x000C0000) >> 6 | (*block & 0x00030000) >> 12 | (*block & 0x00000300) >> 6;
+}
+
+// Calculate block checksum: 0xFF - blockNum - sum of all nibbles
+uint8_t SRIXTool::calculateBlockChecksum(uint32_t *block, uint8_t blockNum) {
+    if (!block) return 0;
+    
+    uint8_t sum = 0;
+    uint32_t data = *block;
+    
+    // Sum all 8 nibbles (4 bits each)
+    for (int i = 0; i < 8; i++) {
+        sum += (data >> (i * 4)) & 0x0F;
+    }
+    
+    return 0xFF - blockNum - sum;
+}
+
+// Calculate encryption key: SK = UID × Vendor × OTP
+void SRIXTool::calculateEncryptionKey() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        _encryptionKey = 0;
+        _vendorCalculated = false;
+        return;
+    }
+    
+    // Get OTP from block 0x06
+    uint32_t *block6 = getBlockPtr(0x06);
+    if (!block6) {
+        _encryptionKey = 0;
+        _vendorCalculated = false;
+        return;
+    }
+    
+    // OTP calculation with byte swap and two's complement
+    uint32_t otp = ~(*block6 << 24 | (*block6 & 0x0000FF00) << 8 |
+                     (*block6 & 0x00FF0000) >> 8 | *block6 >> 24) + 1;
+    
+    // Decode vendor blocks temporarily
+    uint32_t *block18 = getBlockPtr(0x18);
+    uint32_t *block19 = getBlockPtr(0x19);
+    
+    if (!block18 || !block19) {
+        _encryptionKey = 0;
+        _vendorCalculated = false;
+        return;
+    }
+    
+    encodeDecodeBlock(block18);
+    encodeDecodeBlock(block19);
+    
+    // Extract vendor
+    uint32_t vendor = (*block18 << 16 | (*block19 & 0x0000FFFF)) + 1;
+    _currentVendor = vendor - 1; // Store original vendor
+    
+    // Re-encode blocks
+    encodeDecodeBlock(block18);
+    encodeDecodeBlock(block19);
+    
+    // Calculate encryption key
+    _encryptionKey = getUidAsUint64() * vendor * otp;
+    _vendorCalculated = true;
+}
+
+// Import vendor code to blocks 0x18, 0x19, 0x1C, 0x1D
+void SRIXTool::importVendor(uint32_t vendor) {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return;
+    
+    // Prepare vendor blocks (split into upper and lower parts)
+    uint32_t vendorHigh = (vendor >> 16) & 0x0000FFFF;
+    uint32_t vendorLow = vendor & 0x0000FFFF;
+    
+    // Block 0x18: Upper 16 bits in high word
+    uint32_t *block18 = getBlockPtr(0x18);
+    uint32_t *block19 = getBlockPtr(0x19);
+    uint32_t *block1C = getBlockPtr(0x1C);
+    uint32_t *block1D = getBlockPtr(0x1D);
+    
+    if (!block18 || !block19 || !block1C || !block1D) return;
+    
+    // Set primary vendor (blocks 0x18, 0x19)
+    *block18 = vendorHigh << 16;
+    *block19 = vendorLow;
+    
+    // Encode primary vendor
+    encodeDecodeBlock(block18);
+    encodeDecodeBlock(block19);
+    
+    // Set backup vendor (blocks 0x1C, 0x1D) - same as primary
+    *block1C = *block18;
+    *block1D = *block19;
+    
+    _currentVendor = vendor;
+    _vendorCalculated = false;
+}
+
+// Export vendor code
+void SRIXTool::exportVendor(uint32_t *vendor) {
+    if (!vendor) return;
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        *vendor = 0;
+        return;
+    }
+    
+    uint32_t *block18 = getBlockPtr(0x18);
+    uint32_t *block19 = getBlockPtr(0x19);
+    
+    if (!block18 || !block19) {
+        *vendor = 0;
+        return;
+    }
+    
+    // Decode to read
+    encodeDecodeBlock(block18);
+    encodeDecodeBlock(block19);
+    
+    // Extract vendor
+    *vendor = (*block18 << 16 | (*block19 & 0x0000FFFF)) + 1;
+    
+    // Re-encode
+    encodeDecodeBlock(block18);
+    encodeDecodeBlock(block19);
+}
+
+// Check if key is in factory reset state
+bool SRIXTool::isReset() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
+    
+    uint32_t *block18 = getBlockPtr(0x18);
+    uint32_t *block19 = getBlockPtr(0x19);
+    
+    if (!block18 || !block19) return false;
+    
+    // Factory reset values
+    const uint32_t block18Reset = 0x8FCD0F48;
+    const uint32_t block19Reset = 0xC0820007;
+    
+    return (*block18 == block18Reset && *block19 == block19Reset);
+}
+
+// Get current credit from block 0x21
+uint16_t SRIXTool::getCurrentCredit() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
+    
+    uint32_t *block21 = getBlockPtr(0x21);
+    if (!block21) return 0;
+    
+    // Decode block
+    uint32_t decoded = *block21;
+    encodeDecodeBlock(&decoded);
+    
+    // Extract credit (stored in cents)
+    uint16_t credit = (decoded >> 16) & 0xFFFF;
+    
+    return credit;
+}
+
+// Add cents with transaction splitting
+bool SRIXTool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year) {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
+    
+    // Get current credit
+    uint16_t currentCredit = getCurrentCredit();
+    
+    // Calculate new credit
+    uint16_t newCredit = currentCredit + cents;
+    
+    // Update block 0x21 with new credit
+    uint32_t *block21 = getBlockPtr(0x21);
+    if (!block21) return false;
+    
+    // Prepare new block data
+    uint32_t newBlock = (newCredit << 16) | (daysDifference(day, month, year) & 0xFFFF);
+    
+    // Encode block
+    encodeDecodeBlock(&newBlock);
+    *block21 = newBlock;
+    
+    // Update transaction pointer (block 0x3C)
+    uint8_t txOffset = getCurrentTransactionOffset();
+    if (txOffset < 8) {
+        // Add transaction to history (blocks 0x34-0x3B)
+        uint32_t *txBlock = getBlockPtr(0x34 + txOffset);
+        if (txBlock) {
+            uint32_t txData = (cents << 16) | (daysDifference(day, month, year) & 0xFFFF);
+            encodeDecodeBlock(&txData);
+            *txBlock = txData;
+            
+            // Increment transaction offset
+            uint32_t *block3C = getBlockPtr(0x3C);
+            if (block3C) {
+                *block3C = (txOffset + 1) % 8;
+            }
+        }
+    }
+    
+    return true;
+}
+
+// Set specific credit (reset + add)
+bool SRIXTool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint8_t year) {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
+    
+    // Reset credit to 0
+    uint32_t *block21 = getBlockPtr(0x21);
+    if (!block21) return false;
+    
+    uint32_t newBlock = (0 << 16) | (daysDifference(day, month, year) & 0xFFFF);
+    encodeDecodeBlock(&newBlock);
+    *block21 = newBlock;
+    
+    // Add the desired amount
+    return addCents(cents, day, month, year);
+}
+
+// Check Lock ID protection (block 0x05)
+bool SRIXTool::checkLockID() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
+    
+    uint32_t *block05 = getBlockPtr(0x05);
+    if (!block05) return false;
+    
+    // Check if first byte is 0x7F (locked)
+    uint8_t lockByte = (*block05 >> 24) & 0xFF;
+    return (lockByte == 0x7F);
+}
+
+// Get current transaction offset (block 0x3C)
+uint8_t SRIXTool::getCurrentTransactionOffset() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
+    
+    uint32_t *block3C = getBlockPtr(0x3C);
+    if (!block3C) return 0;
+    
+    return (*block3C) & 0x07; // Only use lower 3 bits (0-7)
+}
+
+// Calculate days from 1/1/1995
+uint16_t SRIXTool::daysDifference(uint8_t day, uint8_t month, uint16_t year) {
+    // Simple calculation from 1/1/1995
+    const uint16_t baseYear = 1995;
+    
+    if (year < baseYear) return 0;
+    
+    // Days per month (non-leap year)
+    const uint8_t daysInMonth[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    
+    uint32_t totalDays = 0;
+    
+    // Add days for complete years
+    for (uint16_t y = baseYear; y < year; y++) {
+        bool isLeap = (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0));
+        totalDays += isLeap ? 366 : 365;
+    }
+    
+    // Add days for complete months in current year
+    bool isLeap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0));
+    for (uint8_t m = 1; m < month; m++) {
+        totalDays += daysInMonth[m - 1];
+        if (m == 2 && isLeap) totalDays++; // Add leap day
+    }
+    
+    // Add days in current month
+    totalDays += day - 1; // -1 because we start from day 1
+    
+    return (uint16_t)totalDays;
+}
+
+// Reset key to factory defaults
+bool SRIXTool::resetKey() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
+    
+    // Factory reset values for vendor blocks
+    const uint32_t block18Reset = 0x8FCD0F48;
+    const uint32_t block19Reset = 0xC0820007;
+    
+    uint32_t *block18 = getBlockPtr(0x18);
+    uint32_t *block19 = getBlockPtr(0x19);
+    uint32_t *block1C = getBlockPtr(0x1C);
+    uint32_t *block1D = getBlockPtr(0x1D);
+    
+    if (!block18 || !block19 || !block1C || !block1D) return false;
+    
+    // Reset primary vendor
+    *block18 = block18Reset;
+    *block19 = block19Reset;
+    
+    // Reset backup vendor
+    *block1C = block18Reset;
+    *block1D = block19Reset;
+    
+    // Reset credit blocks
+    uint32_t *block21 = getBlockPtr(0x21);
+    uint32_t *block25 = getBlockPtr(0x25);
+    
+    if (block21) *block21 = 0;
+    if (block25) *block25 = 0;
+    
+    // Reset transaction history
+    for (uint8_t i = 0x34; i <= 0x3B; i++) {
+        uint32_t *txBlock = getBlockPtr(i);
+        if (txBlock) *txBlock = 0;
+    }
+    
+    // Reset transaction pointer
+    uint32_t *block3C = getBlockPtr(0x3C);
+    if (block3C) *block3C = 0;
+    
+    _currentVendor = 0;
+    _vendorCalculated = false;
+    
+    return true;
+}
+
+// ============================================================================
+// MyKey UI Functions
+// ============================================================================
+
+void SRIXTool::show_mykey_info() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        displayError("No data in memory!");
+        displayError("Read or load a tag first.");
+        delay(2000);
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    display_banner();
+    
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(FM);
+    padprintln("MyKey Info:");
+    tft.setTextSize(FP);
+    padprintln("");
+    
+    // Calculate encryption key if not already done
+    if (!_vendorCalculated) {
+        calculateEncryptionKey();
+    }
+    
+    // Display vendor
+    uint32_t vendor = 0;
+    exportVendor(&vendor);
+    padprintln("Vendor: 0x" + String(vendor, HEX));
+    padprintln("");
+    
+    // Display credit
+    uint16_t credit = getCurrentCredit();
+    float creditEuro = credit / 100.0;
+    padprintln("Credit: " + String(creditEuro, 2) + " EUR");
+    padprintln("        (" + String(credit) + " cents)");
+    padprintln("");
+    
+    // Display lock status
+    bool locked = checkLockID();
+    padprintln("Lock ID: " + String(locked ? "LOCKED" : "UNLOCKED"));
+    padprintln("");
+    
+    // Display reset status
+    bool resetState = isReset();
+    padprintln("Status: " + String(resetState ? "FACTORY RESET" : "CONFIGURED"));
+    padprintln("");
+    
+    tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
+    padprintln("Press [OK] to continue");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    
+    delayWithReturn(5000);
+}
+
+void SRIXTool::add_credit_ui() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        displayError("No data in memory!");
+        displayError("Read or load a tag first.");
+        delay(2000);
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    display_banner();
+    
+    // Get amount in cents
+    String amountStr = num_keyboard("", 10, "Enter cents to add:");
+    if (amountStr == "\x1B" || amountStr.isEmpty()) {
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    uint16_t cents = amountStr.toInt();
+    
+    // Get current date (simplified - use current time)
+    time_t now = time(nullptr);
+    struct tm *timeinfo = localtime(&now);
+    
+    uint8_t day = timeinfo->tm_mday;
+    uint8_t month = timeinfo->tm_mon + 1;
+    uint16_t year = timeinfo->tm_year + 1900;
+    
+    // Add credit
+    if (addCents(cents, day, month, year)) {
+        displaySuccess("Credit added!");
+        padprintln("");
+        float creditEuro = cents / 100.0;
+        padprintln("Added: " + String(creditEuro, 2) + " EUR");
+        padprintln("");
+        uint16_t newCredit = getCurrentCredit();
+        float newCreditEuro = newCredit / 100.0;
+        padprintln("New credit: " + String(newCreditEuro, 2) + " EUR");
+    } else {
+        displayError("Failed to add credit!");
+    }
+    
+    delayWithReturn(3000);
+    set_state(IDLE_MODE);
+}
+
+void SRIXTool::set_credit_ui() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        displayError("No data in memory!");
+        displayError("Read or load a tag first.");
+        delay(2000);
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    display_banner();
+    
+    // Get amount in cents
+    String amountStr = num_keyboard("", 10, "Enter new credit (cents):");
+    if (amountStr == "\x1B" || amountStr.isEmpty()) {
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    uint16_t cents = amountStr.toInt();
+    
+    // Get current date
+    time_t now = time(nullptr);
+    struct tm *timeinfo = localtime(&now);
+    
+    uint8_t day = timeinfo->tm_mday;
+    uint8_t month = timeinfo->tm_mon + 1;
+    uint16_t year = timeinfo->tm_year + 1900;
+    
+    // Set credit
+    if (setCents(cents, day, month, year)) {
+        displaySuccess("Credit set!");
+        padprintln("");
+        float creditEuro = cents / 100.0;
+        padprintln("New credit: " + String(creditEuro, 2) + " EUR");
+    } else {
+        displayError("Failed to set credit!");
+    }
+    
+    delayWithReturn(3000);
+    set_state(IDLE_MODE);
+}
+
+void SRIXTool::import_vendor_ui() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        displayError("No data in memory!");
+        displayError("Read or load a tag first.");
+        delay(2000);
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    display_banner();
+    
+    // Get vendor code in hex
+    String vendorStr = hex_keyboard("", 8, "Enter vendor code (hex):");
+    if (vendorStr == "\x1B" || vendorStr.isEmpty()) {
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    // Parse hex string
+    uint32_t vendor = strtoul(vendorStr.c_str(), NULL, 16);
+    
+    // Import vendor
+    importVendor(vendor);
+    
+    displaySuccess("Vendor imported!");
+    padprintln("");
+    padprintln("Vendor: 0x" + String(vendor, HEX));
+    
+    delayWithReturn(3000);
+    set_state(IDLE_MODE);
+}
+
+void SRIXTool::export_vendor_ui() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        displayError("No data in memory!");
+        displayError("Read or load a tag first.");
+        delay(2000);
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    display_banner();
+    
+    uint32_t vendor = 0;
+    exportVendor(&vendor);
+    
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    tft.setTextSize(FM);
+    padprintln("Current Vendor:");
+    tft.setTextSize(FP);
+    padprintln("");
+    padprintln("0x" + String(vendor, HEX));
+    padprintln("");
+    padprintln("Decimal: " + String(vendor));
+    padprintln("");
+    
+    tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
+    padprintln("Press [OK] to continue");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    
+    delayWithReturn(5000);
+}
+
+void SRIXTool::reset_key_ui() {
+    if (!_dump_valid_from_read && !_dump_valid_from_load) {
+        displayError("No data in memory!");
+        displayError("Read or load a tag first.");
+        delay(2000);
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    display_banner();
+    
+    padprintln("WARNING: This will reset");
+    padprintln("the key to factory defaults!");
+    padprintln("");
+    padprintln("All data will be lost.");
+    padprintln("");
+    
+    options = {};
+    bool confirmed = false;
+    
+    options.emplace_back("Confirm Reset", [&confirmed]() { confirmed = true; });
+    options.emplace_back("Cancel", [this]() { set_state(IDLE_MODE); });
+    
+    loopOptions(options);
+    
+    if (confirmed) {
+        display_banner();
+        
+        if (resetKey()) {
+            displaySuccess("Key reset to factory!");
+            padprintln("");
+            padprintln("Vendor reset to default");
+            padprintln("Credit reset to 0");
+            padprintln("Transaction history cleared");
+        } else {
+            displayError("Failed to reset key!");
+        }
+        
+        delayWithReturn(3000);
+        set_state(IDLE_MODE);
+    }
 }
 
 // Entry point
