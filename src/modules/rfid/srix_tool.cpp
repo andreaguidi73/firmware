@@ -938,11 +938,6 @@ void SRIXTool::calculateEncryptionKey() {
 void SRIXTool::importVendor(uint32_t vendor) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return;
     
-    // Prepare vendor blocks (split into upper and lower parts)
-    uint32_t vendorHigh = (vendor >> 16) & 0x0000FFFF;
-    uint32_t vendorLow = vendor & 0x0000FFFF;
-    
-    // Block 0x18: Upper 16 bits in high word
     uint32_t *block18 = getBlockPtr(0x18);
     uint32_t *block19 = getBlockPtr(0x19);
     uint32_t *block1C = getBlockPtr(0x1C);
@@ -950,15 +945,20 @@ void SRIXTool::importVendor(uint32_t vendor) {
     
     if (!block18 || !block19 || !block1C || !block1D) return;
     
-    // Set primary vendor (blocks 0x18, 0x19)
-    *block18 = vendorHigh << 16;
-    *block19 = vendorLow;
+    // Vendor is stored as (vendor - 1)
+    // Block 0x18 contains upper 16 bits in its lower word (as a 32-bit value)
+    // Block 0x19 contains lower 16 bits in its lower word
+    uint32_t vendorMinusOne = vendor - 1;
     
-    // Encode primary vendor
+    // Set unencoded values
+    *block18 = (vendorMinusOne >> 16);  // Upper 16 bits as a 32-bit value
+    *block19 = (vendorMinusOne & 0xFFFF);  // Lower 16 bits as a 32-bit value
+    
+    // Encode for storage
     encodeDecodeBlock(block18);
     encodeDecodeBlock(block19);
     
-    // Set backup vendor (blocks 0x1C, 0x1D) - same as primary
+    // Set backup vendor (blocks 0x1C, 0x1D) - same as primary encoded values
     *block1C = *block18;
     *block1D = *block19;
     
