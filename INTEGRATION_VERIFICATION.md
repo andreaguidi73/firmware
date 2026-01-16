@@ -194,13 +194,14 @@ This is the correct architecture for this codebase, where functionality is organ
 ### srix_tool.cpp/h
 ```cpp
 /**
- * @file srix_tool.cpp
+ * @file srix_tool.cpp (or srix_tool.h for the header)
  * @brief SRIX4K/SRIX512 Reader/Writer Tool v1.3 - FIXED MyKey
  * @author Senape3000
  * @info https://github.com/Senape3000/firmware/blob/main/docs_custom/SRIX/SRIX_Tool_README.md
  * @date 2026-01-01
  */
 ```
+Note: Date is from original author. This represents the tool version, not integration date.
 
 ### pn532_srix.cpp/h
 ```cpp
