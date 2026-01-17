@@ -1570,3 +1570,506 @@ window.addEventListener('popstate', (event) => {
     }, 100); // Small delay to ensure the file list is loaded first
   }
 })();
+
+// ==========================================
+// MAVAI Module - MyKey Advanced Vendor Authenticator Interface
+// ==========================================
+
+const MAVAI_EXPECTED_BLOCKS = 128;
+const MAVAI_RESET_WARNING = '⚠️ WARNING: This will FACTORY RESET the MyKey!\n\n' +
+    'This action will:\n' +
+    '- Reset vendor blocks to defaults\n' +
+    '- Clear all credit\n' +
+    '- Clear transaction history\n\n' +
+    'This CANNOT be undone!\n\n' +
+    'Are you sure?';
+
+const MAVAI = {
+    dump: null,
+    credit: 0,
+    vendor: null,
+    uid: null,
+    keyId: null,
+    encKey: null,
+    status: 'unknown',
+    dumpExpanded: false
+};
+
+function openMavai() {
+    Dialog.show('mavai');
+    mavaiRefreshInfo();
+}
+
+async function mavaiRefreshInfo() {
+    mavaiSetStatus('loading', 'Fetching MAVAI data...');
+    try {
+        // Fetch API info (validate API is available)
+        await requestGet('/api/mavai/info');
+        
+        // Fetch credit
+        const creditResp = await requestGet('/api/mavai/credit');
+        const creditData = JSON.parse(creditResp);
+        MAVAI.credit = creditData.credit || 0;
+        updateMavaiDisplay('credit', formatCredit(MAVAI.credit));
+        
+        // Fetch vendor
+        const vendorResp = await requestGet('/api/mavai/vendor');
+        const vendorData = JSON.parse(vendorResp);
+        MAVAI.vendor = vendorData.vendor || '0x00000000';
+        updateMavaiDisplay('vendor', MAVAI.vendor);
+        
+        // Fetch dump
+        try {
+            const dumpResp = await requestGet('/api/mavai/dump');
+            const dumpData = JSON.parse(dumpResp);
+            if (dumpData.status !== 'error') {
+                parseMavaiDump(dumpData);
+            }
+        } catch (e) {
+            console.log('No dump available');
+        }
+        
+        mavaiSetStatus('success', 'Data loaded successfully');
+    } catch (error) {
+        console.error('Failed to fetch MAVAI data:', error);
+        mavaiSetStatus('error', 'Failed to load data: ' + error.message);
+    }
+}
+
+function formatCredit(cents) {
+    const euros = (cents / 100).toFixed(2);
+    return '€' + euros;
+}
+
+function updateMavaiDisplay(field, value) {
+    const element = document.getElementById('mavai-' + field);
+    if (element) {
+        element.textContent = value || '-';
+    }
+}
+
+function parseMavaiDump(data) {
+    // Parse dump data and update UI
+    if (data.uid) {
+        MAVAI.uid = data.uid;
+        updateMavaiDisplay('uid', data.uid);
+    }
+    if (data.keyId) {
+        MAVAI.keyId = data.keyId;
+        updateMavaiDisplay('keyid', data.keyId);
+    }
+    if (data.encKey) {
+        MAVAI.encKey = data.encKey;
+        updateMavaiDisplay('enckey', data.encKey);
+    }
+    if (data.status) {
+        MAVAI.status = data.status;
+        updateMavaiDisplay('status', data.status);
+    }
+    if (data.blocks) {
+        MAVAI.dump = data;
+        showDumpPreview(data);
+    }
+}
+
+function mavaiSetStatus(type, message) {
+    const statusBar = document.getElementById('mavai-status-bar');
+    const statusText = statusBar.querySelector('.status-text');
+    
+    statusBar.className = 'mavai-status-bar ' + type;
+    statusText.textContent = message;
+}
+
+async function mavaiAddCredit() {
+    const input = document.getElementById('mavai-credit-input');
+    const amount = parseInt(input.value);
+    
+    if (isNaN(amount) || amount <= 0) {
+        alert('Please enter a valid credit amount (in cents)');
+        return;
+    }
+    
+    mavaiSetStatus('loading', 'Adding credit...');
+    try {
+        const resp = await requestPost('/api/mavai/credit', {
+            amount: amount,
+            action: 'add'
+        });
+        const data = JSON.parse(resp);
+        
+        if (data.status === 'success') {
+            MAVAI.credit += amount;
+            updateMavaiDisplay('credit', formatCredit(MAVAI.credit));
+            mavaiSetStatus('success', 'Credit added: +' + formatCredit(amount));
+            input.value = '';
+        } else {
+            mavaiSetStatus('error', 'Failed to add credit');
+        }
+    } catch (error) {
+        console.error('Failed to add credit:', error);
+        mavaiSetStatus('error', 'Error: ' + error.message);
+    }
+}
+
+async function mavaiSetCredit() {
+    const input = document.getElementById('mavai-credit-input');
+    const amount = parseInt(input.value);
+    
+    if (isNaN(amount) || amount < 0) {
+        alert('Please enter a valid credit amount (in cents)');
+        return;
+    }
+    
+    if (!confirm(`Set credit to ${formatCredit(amount)}?`)) {
+        return;
+    }
+    
+    mavaiSetStatus('loading', 'Setting credit...');
+    try {
+        const resp = await requestPost('/api/mavai/credit', {
+            amount: amount,
+            action: 'set'
+        });
+        const data = JSON.parse(resp);
+        
+        if (data.status === 'success') {
+            MAVAI.credit = amount;
+            updateMavaiDisplay('credit', formatCredit(MAVAI.credit));
+            mavaiSetStatus('success', 'Credit set to ' + formatCredit(amount));
+            input.value = '';
+        } else {
+            mavaiSetStatus('error', 'Failed to set credit');
+        }
+    } catch (error) {
+        console.error('Failed to set credit:', error);
+        mavaiSetStatus('error', 'Error: ' + error.message);
+    }
+}
+
+async function mavaiImportVendor() {
+    const input = document.getElementById('mavai-vendor-input');
+    const vendor = input.value.trim().replace(/^0x/, '');
+    
+    if (!vendor || !/^[0-9A-Fa-f]{8}$/.test(vendor)) {
+        alert('Please enter a valid vendor code (8 hex digits)');
+        return;
+    }
+    
+    if (!confirm(`Import vendor code: 0x${vendor.toUpperCase()}?`)) {
+        return;
+    }
+    
+    mavaiSetStatus('loading', 'Importing vendor...');
+    try {
+        const resp = await requestPost('/api/mavai/vendor', {
+            vendor: vendor
+        });
+        const data = JSON.parse(resp);
+        
+        if (data.status === 'success') {
+            MAVAI.vendor = '0x' + vendor.toUpperCase();
+            updateMavaiDisplay('vendor', MAVAI.vendor);
+            mavaiSetStatus('success', 'Vendor imported successfully');
+            input.value = '';
+        } else {
+            mavaiSetStatus('error', 'Failed to import vendor');
+        }
+    } catch (error) {
+        console.error('Failed to import vendor:', error);
+        mavaiSetStatus('error', 'Error: ' + error.message);
+    }
+}
+
+async function mavaiExportVendor() {
+    mavaiSetStatus('loading', 'Exporting vendor...');
+    try {
+        const resp = await requestGet('/api/mavai/vendor');
+        const data = JSON.parse(resp);
+        
+        if (data.vendor) {
+            // Copy to clipboard
+            const vendor = data.vendor;
+            navigator.clipboard.writeText(vendor).then(() => {
+                mavaiSetStatus('success', 'Vendor copied to clipboard: ' + vendor);
+                document.getElementById('mavai-vendor-input').value = vendor.replace(/^0x/, '');
+            }).catch(err => {
+                // Fallback: show in input
+                document.getElementById('mavai-vendor-input').value = vendor.replace(/^0x/, '');
+                mavaiSetStatus('success', 'Vendor exported: ' + vendor);
+            });
+        } else {
+            mavaiSetStatus('error', 'No vendor data available');
+        }
+    } catch (error) {
+        console.error('Failed to export vendor:', error);
+        mavaiSetStatus('error', 'Error: ' + error.message);
+    }
+}
+
+async function mavaiReadTag() {
+    mavaiSetStatus('loading', 'Reading tag...');
+    try {
+        const resp = await requestGet('/api/mavai/read');
+        const data = JSON.parse(resp);
+        
+        if (data.status === 'error') {
+            mavaiSetStatus('error', data.message || 'Failed to read tag');
+        } else {
+            parseMavaiDump(data);
+            mavaiSetStatus('success', 'Tag read successfully');
+        }
+    } catch (error) {
+        console.error('Failed to read tag:', error);
+        mavaiSetStatus('error', 'Error: ' + error.message);
+    }
+}
+
+async function mavaiWriteTag() {
+    if (!MAVAI.dump) {
+        alert('No dump loaded. Please read a tag or upload a dump first.');
+        return;
+    }
+    
+    if (!confirm('Write current dump to tag? This will overwrite the tag data.')) {
+        return;
+    }
+    
+    mavaiSetStatus('loading', 'Writing to tag...');
+    try {
+        const resp = await requestPost('/api/mavai/write', {
+            dump: JSON.stringify(MAVAI.dump)
+        });
+        const data = JSON.parse(resp);
+        
+        if (data.status === 'error') {
+            mavaiSetStatus('error', data.message || 'Failed to write tag');
+        } else {
+            mavaiSetStatus('success', 'Tag written successfully');
+        }
+    } catch (error) {
+        console.error('Failed to write tag:', error);
+        mavaiSetStatus('error', 'Error: ' + error.message);
+    }
+}
+
+async function mavaiResetKey() {
+    if (!confirm(MAVAI_RESET_WARNING)) {
+        return;
+    }
+    
+    if (!confirm('Final confirmation: Reset MyKey to factory defaults?')) {
+        return;
+    }
+    
+    mavaiSetStatus('loading', 'Resetting key...');
+    try {
+        const resp = await requestPost('/api/mavai/reset', {});
+        const data = JSON.parse(resp);
+        
+        if (data.status === 'success') {
+            MAVAI.credit = 0;
+            updateMavaiDisplay('credit', formatCredit(0));
+            MAVAI.status = 'RESET';
+            updateMavaiDisplay('status', 'RESET');
+            mavaiSetStatus('success', 'Key reset successfully');
+        } else {
+            mavaiSetStatus('error', data.message || 'Failed to reset key');
+        }
+    } catch (error) {
+        console.error('Failed to reset key:', error);
+        mavaiSetStatus('error', 'Error: ' + error.message);
+    }
+}
+
+function mavaiDownloadDump() {
+    if (!MAVAI.dump) {
+        alert('No dump loaded. Please read a tag first.');
+        return;
+    }
+    
+    const content = generateMavaiFile(MAVAI.dump);
+    const blob = new Blob([content], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'dump_' + (MAVAI.uid || 'unknown').replace(/\s/g, '') + '.mavai';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    mavaiSetStatus('success', 'Dump downloaded');
+}
+
+function generateMavaiFile(data) {
+    let content = 'Filetype: Bruce MAVAI Dump\n';
+    content += 'Version: 1.0\n';
+    content += 'UID: ' + (data.uid || 'UNKNOWN') + '\n';
+    content += 'KeyID: ' + (data.keyId || 'UNKNOWN') + '\n';
+    content += 'Vendor: ' + (data.vendor || 'UNKNOWN') + '\n';
+    content += 'EncryptionKey: ' + (data.encKey || 'UNKNOWN') + '\n';
+    content += 'Credit: ' + (data.credit || '0') + '\n';
+    content += 'ProductionDate: ' + (data.productionDate || '00/00/0000') + '\n';
+    content += 'Blocks: ' + (data.blocks ? data.blocks.length : MAVAI_EXPECTED_BLOCKS) + '\n';
+    content += '# Data:\n';
+    
+    if (data.blocks) {
+        data.blocks.forEach((block, index) => {
+            const hexIndex = index.toString(16).toUpperCase().padStart(2, '0');
+            content += '[' + hexIndex + '] ' + block + '\n';
+        });
+    } else {
+        // Generate empty blocks
+        for (let i = 0; i < MAVAI_EXPECTED_BLOCKS; i++) {
+            const hexIndex = i.toString(16).toUpperCase().padStart(2, '0');
+            content += '[' + hexIndex + '] 00000000\n';
+        }
+    }
+    
+    return content;
+}
+
+function mavaiUploadDump(files) {
+    if (!files || files.length === 0) {
+        return;
+    }
+    
+    const file = files[0];
+    if (!file.name.endsWith('.mavai')) {
+        alert('Please select a .mavai file');
+        return;
+    }
+    
+    mavaiSetStatus('loading', 'Loading dump file...');
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const content = e.target.result;
+            const data = parseMavaiFile(content);
+            
+            MAVAI.dump = data;
+            parseMavaiDump(data);
+            
+            mavaiSetStatus('success', 'Dump loaded: ' + file.name);
+        } catch (error) {
+            console.error('Failed to parse dump file:', error);
+            mavaiSetStatus('error', 'Invalid dump file: ' + error.message);
+        }
+    };
+    reader.onerror = function() {
+        mavaiSetStatus('error', 'Failed to read file');
+    };
+    reader.readAsText(file);
+    
+    // Reset input
+    document.getElementById('mavai-upload-input').value = '';
+}
+
+function parseMavaiFile(content) {
+    const lines = content.split('\n');
+    const data = {
+        blocks: []
+    };
+    
+    let inDataSection = false;
+    
+    for (let line of lines) {
+        line = line.trim();
+        
+        if (line.startsWith('# Data:')) {
+            inDataSection = true;
+            continue;
+        }
+        
+        if (inDataSection) {
+            // Parse block data: [00] XXXXXXXX
+            const match = line.match(/^\[([0-9A-Fa-f]{2})\]\s+([0-9A-Fa-f]{8})$/);
+            if (match) {
+                data.blocks.push(match[2].toUpperCase());
+            }
+        } else {
+            // Parse header fields
+            const [key, ...valueParts] = line.split(':');
+            if (valueParts.length > 0) {
+                const value = valueParts.join(':').trim();
+                
+                switch(key.trim()) {
+                    case 'UID':
+                        data.uid = value;
+                        break;
+                    case 'KeyID':
+                        data.keyId = value;
+                        break;
+                    case 'Vendor':
+                        data.vendor = value;
+                        break;
+                    case 'EncryptionKey':
+                        data.encKey = value;
+                        break;
+                    case 'Credit':
+                        data.credit = parseInt(value) || 0;
+                        break;
+                    case 'ProductionDate':
+                        data.productionDate = value;
+                        break;
+                }
+            }
+        }
+    }
+    
+    if (data.blocks.length !== MAVAI_EXPECTED_BLOCKS) {
+        throw new Error('Invalid dump file: expected ' + MAVAI_EXPECTED_BLOCKS + ' blocks, got ' + data.blocks.length);
+    }
+    
+    return data;
+}
+
+function showDumpPreview(data) {
+    const preview = document.getElementById('mavai-dump-preview');
+    const content = document.getElementById('mavai-dump-content');
+    
+    if (!data.blocks || data.blocks.length === 0) {
+        preview.classList.add('hidden');
+        return;
+    }
+    
+    // Show first 16 blocks
+    let previewText = '';
+    const numBlocks = MAVAI.dumpExpanded ? data.blocks.length : 16;
+    
+    for (let i = 0; i < numBlocks && i < data.blocks.length; i++) {
+        const hexIndex = i.toString(16).toUpperCase().padStart(2, '0');
+        previewText += '[' + hexIndex + '] ' + data.blocks[i] + '\n';
+    }
+    
+    if (!MAVAI.dumpExpanded && data.blocks.length > 16) {
+        previewText += '... (' + (data.blocks.length - 16) + ' more blocks)\n';
+    }
+    
+    content.textContent = previewText;
+    preview.classList.remove('hidden');
+}
+
+function toggleDumpView() {
+    MAVAI.dumpExpanded = !MAVAI.dumpExpanded;
+    
+    const button = document.querySelector('#mavai-dump-preview .btn-action');
+    button.textContent = MAVAI.dumpExpanded ? 'Show Less' : 'Show More';
+    
+    if (MAVAI.dump) {
+        showDumpPreview(MAVAI.dump);
+    }
+}
+
+// Event listeners for MAVAI
+document.addEventListener('DOMContentLoaded', function() {
+    const mavaiRefreshBtn = document.getElementById('mavai-refresh');
+    if (mavaiRefreshBtn) {
+        mavaiRefreshBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            mavaiRefreshInfo();
+        });
+    }
+});
