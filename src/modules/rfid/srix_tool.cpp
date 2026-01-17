@@ -901,11 +901,11 @@ void SRIXTool::delayWithReturn(uint32_t ms) {
 
 // Helper: Get pointer to a block in the dump
 uint32_t* SRIXTool::getBlockPtr(uint8_t blockNum) {
-    if (blockNum >= 128) return nullptr;
-    return (uint32_t*)(&_dump[blockNum * 4]);
+    if (blockNum >= SRIX4K_BLOCKS) return nullptr;
+    return (uint32_t*)(&_dump[blockNum * SRIX_BLOCK_LENGTH]);
 }
 
-// Helper: Get UID as uint64_t
+// Helper: Get UID as uint64_t (big-endian)
 uint64_t SRIXTool::getUidAsUint64() {
     uint64_t uid = 0;
     for (int i = 0; i < 8; i++) {
@@ -914,19 +914,31 @@ uint64_t SRIXTool::getUidAsUint64() {
     return uid;
 }
 
-// Helper: Read a block as uint32_t
-uint32_t SRIXTool::readBlockAsUint32(uint8_t blockNum) {
-    uint32_t *block = getBlockPtr(blockNum);
-    if (!block) return 0;
-    return *block;
+// Helper: Get UID for encryption (first 4 bytes in little-endian)
+uint32_t SRIXTool::getUidForEncryption() {
+    // MyKey uses only first 4 bytes of UID in little-endian order
+    return ((uint32_t)_uid[3] << 24) | ((uint32_t)_uid[2] << 16) | 
+           ((uint32_t)_uid[1] << 8) | (uint32_t)_uid[0];
 }
 
-// Helper: Write a uint32_t to a block
+// Helper: Read a block as uint32_t (little-endian from SRIX4K)
+uint32_t SRIXTool::readBlockAsUint32(uint8_t blockNum) {
+    if (blockNum >= SRIX4K_BLOCKS) return 0;
+    uint8_t *ptr = &_dump[blockNum * SRIX_BLOCK_LENGTH];
+    // Read as little-endian (SRIX4K native format)
+    return ((uint32_t)ptr[3] << 24) | ((uint32_t)ptr[2] << 16) |
+           ((uint32_t)ptr[1] << 8) | (uint32_t)ptr[0];
+}
+
+// Helper: Write a uint32_t to a block (little-endian to SRIX4K)
 void SRIXTool::writeBlockAsUint32(uint8_t blockNum, uint32_t value) {
-    uint32_t *block = getBlockPtr(blockNum);
-    if (block) {
-        *block = value;
-    }
+    if (blockNum >= SRIX4K_BLOCKS) return;
+    uint8_t *ptr = &_dump[blockNum * SRIX_BLOCK_LENGTH];
+    // Write as little-endian (SRIX4K native format)
+    ptr[0] = (uint8_t)(value & 0xFF);
+    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[3] = (uint8_t)((value >> 24) & 0xFF);
 }
 
 // Cryptographic function: XOR-based bit swapping for obfuscation
@@ -994,12 +1006,15 @@ void SRIXTool::calculateEncryptionKey() {
     encodeDecodeBlock(&block19);
     
     // Extract vendor (stored as vendor - 1)
-    uint32_t vendor = ((block18 << 16) | (block19 & 0x0000FFFF)) + 1;
-    _currentVendor = vendor - 1;
+    // After decode, reconstruct vendor from upper and lower 16-bit parts
+    uint32_t vendorRaw = (block18 << 16) | (block19 & 0xFFFF);
+    uint32_t vendor = vendorRaw + 1;
+    // _currentVendor stores the actual vendor value (not the stored value)
+    _currentVendor = vendor;
     
-    // Calculate encryption key (truncated to 32-bit)
-    uint64_t uid = getUidAsUint64();
-    uint64_t key64 = uid * vendor * otp;
+    // Calculate encryption key using 4-byte UID (truncated to 32-bit)
+    uint32_t uid = getUidForEncryption();
+    uint64_t key64 = (uint64_t)uid * (uint64_t)vendor * (uint64_t)otp;
     _encryptionKey = (uint32_t)(key64 & 0xFFFFFFFF);
     _vendorCalculated = true;
 }
@@ -1048,7 +1063,9 @@ void SRIXTool::exportVendor(uint32_t *vendor) {
     encodeDecodeBlock(&block19);
     
     // Extract vendor (stored as vendor - 1)
-    *vendor = ((block18 << 16) | (block19 & 0x0000FFFF)) + 1;
+    // After decode, reconstruct vendor from upper and lower 16-bit parts
+    uint32_t vendorRaw = (block18 << 16) | (block19 & 0xFFFF);
+    *vendor = vendorRaw + 1;
 }
 
 // Check if key is in factory reset state

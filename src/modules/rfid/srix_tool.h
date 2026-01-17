@@ -16,6 +16,11 @@
 #include <Arduino.h>
 #include <FS.h>
 
+// SRIX4K Memory Layout Constants
+#define SRIX4K_BLOCKS 128
+#define SRIX_BLOCK_LENGTH 4
+#define SRIX4K_TOTAL_SIZE (SRIX4K_BLOCKS * SRIX_BLOCK_LENGTH)
+
 class SRIXTool {
 public:
     enum SRIX_State {
@@ -75,6 +80,7 @@ private:
     // Helper to get block pointer
     uint32_t* getBlockPtr(uint8_t blockNum);
     uint64_t getUidAsUint64();
+    uint32_t getUidForEncryption(); // 4-byte UID in little-endian for MyKey
     
     // MyKey - Block read/write helpers
     uint32_t readBlockAsUint32(uint8_t blockNum);
@@ -97,8 +103,8 @@ private:
     bool _screen_drawn = false;
     uint32_t _lastReadTime = 0;
 
-    // RAM storage for 128 blocks (512 bytes)
-    uint8_t _dump[128 * 4];
+    // RAM storage for SRIX4K blocks
+    uint8_t _dump[SRIX4K_TOTAL_SIZE];
     uint8_t _uid[8];
     bool _dump_valid_from_read = false;
     bool _dump_valid_from_load = false;
