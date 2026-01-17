@@ -8,6 +8,7 @@
 #include "modules/rfid/pn532ble.h"
 #include "modules/rfid/rfid125.h"
 #include "modules/rfid/srix_tool.h" //added for srix Tool
+#include "modules/rfid/mavai.h" //added for MAVAI Tool
 #include "modules/rfid/tag_o_matic.h"
 
 #ifndef LITE_VERSION
@@ -44,6 +45,8 @@ void RFIDMenu::optionsMenu() {
     if (bruceConfigPins.rfidModule == PN532_I2C_MODULE) {
         // Added SRIX Menu only if PN is set to i2c mode
         options.insert(options.begin() + 3, {"SRIX Tool", [=]() { PN532_SRIX(); }});
+        // Added MAVAI Menu only if PN is set to i2c mode
+        options.insert(options.begin() + 4, {"MAVAI Tool", [=]() { MAVAI_Tool(); }});
     }
 #endif
 #endif
