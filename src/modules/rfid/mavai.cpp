@@ -918,8 +918,8 @@ void MAVAITool::calculateEncryptionKey() {
     encodeDecodeBlock(&block19);
     
     // Extract vendor (stored as vendor - 1)
-    // After decode, extract lower 16 bits from each block in little-endian
-    uint32_t vendorRaw = ((block18 & 0xFFFF) << 16) | (block19 & 0xFFFF);
+    // After decode, reconstruct vendor from upper and lower 16-bit parts
+    uint32_t vendorRaw = (block18 << 16) | (block19 & 0xFFFF);
     uint32_t vendor = vendorRaw + 1;
     _currentVendor = vendor;
     
@@ -974,8 +974,8 @@ void MAVAITool::exportVendor(uint32_t *vendor) {
     encodeDecodeBlock(&block19);
     
     // Extract vendor (stored as vendor - 1)
-    // After decode, extract lower 16 bits from each block in little-endian
-    uint32_t vendorRaw = ((block18 & 0xFFFF) << 16) | (block19 & 0xFFFF);
+    // After decode, reconstruct vendor from upper and lower 16-bit parts
+    uint32_t vendorRaw = (block18 << 16) | (block19 & 0xFFFF);
     *vendor = vendorRaw + 1;
 }
 
