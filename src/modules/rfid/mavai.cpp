@@ -921,6 +921,7 @@ void MAVAITool::calculateEncryptionKey() {
     // After decode, reconstruct vendor from upper and lower 16-bit parts
     uint32_t vendorRaw = (block18 << 16) | (block19 & 0xFFFF);
     uint32_t vendor = vendorRaw + 1;
+    // _currentVendor stores the actual vendor value (not the stored value)
     _currentVendor = vendor;
     
     // Calculate encryption key using 4-byte UID (truncated to 32-bit)
