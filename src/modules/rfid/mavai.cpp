@@ -814,7 +814,7 @@ void MAVAITool::delayWithReturn(uint32_t ms) {
 // Helper: Get pointer to a block in the dump
 uint32_t* MAVAITool::getBlockPtr(uint8_t blockNum) {
     if (blockNum >= SRIX4K_BLOCKS) return nullptr;
-    return (uint32_t*)(&_dump[blockNum * 4]);
+    return (uint32_t*)(&_dump[blockNum * SRIX_BLOCK_LENGTH]);
 }
 
 // Helper: Get UID as uint64_t (big-endian)
@@ -836,7 +836,7 @@ uint32_t MAVAITool::getUidForEncryption() {
 // Helper: Read a block as uint32_t (little-endian from SRIX4K)
 uint32_t MAVAITool::readBlockAsUint32(uint8_t blockNum) {
     if (blockNum >= SRIX4K_BLOCKS) return 0;
-    uint8_t *ptr = &_dump[blockNum * 4];
+    uint8_t *ptr = &_dump[blockNum * SRIX_BLOCK_LENGTH];
     // Read as little-endian (SRIX4K native format)
     return ((uint32_t)ptr[3] << 24) | ((uint32_t)ptr[2] << 16) |
            ((uint32_t)ptr[1] << 8) | (uint32_t)ptr[0];
@@ -845,7 +845,7 @@ uint32_t MAVAITool::readBlockAsUint32(uint8_t blockNum) {
 // Helper: Write a uint32_t to a block (little-endian to SRIX4K)
 void MAVAITool::writeBlockAsUint32(uint8_t blockNum, uint32_t value) {
     if (blockNum >= SRIX4K_BLOCKS) return;
-    uint8_t *ptr = &_dump[blockNum * 4];
+    uint8_t *ptr = &_dump[blockNum * SRIX_BLOCK_LENGTH];
     // Write as little-endian (SRIX4K native format)
     ptr[0] = (uint8_t)(value & 0xFF);
     ptr[1] = (uint8_t)((value >> 8) & 0xFF);
