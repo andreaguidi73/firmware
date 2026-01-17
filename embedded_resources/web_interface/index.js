@@ -1684,7 +1684,7 @@ async function mavaiAddCredit() {
     const input = document.getElementById('mavai-credit-input');
     const amount = parseInt(input.value);
     
-    if (!amount || amount <= 0) {
+    if (isNaN(amount) || amount <= 0) {
         alert('Please enter a valid credit amount (in cents)');
         return;
     }
@@ -1748,14 +1748,12 @@ async function mavaiSetCredit() {
 
 async function mavaiImportVendor() {
     const input = document.getElementById('mavai-vendor-input');
-    const processedVendor = input.value.trim().replace(/^0x/, '');
+    const vendor = input.value.trim().replace(/^0x/, '');
     
-    if (!processedVendor || !/^[0-9A-Fa-f]{8}$/.test(processedVendor)) {
+    if (!vendor || !/^[0-9A-Fa-f]{8}$/.test(vendor)) {
         alert('Please enter a valid vendor code (8 hex digits)');
         return;
     }
-    
-    const vendor = processedVendor;
     
     if (!confirm(`Import vendor code: 0x${vendor.toUpperCase()}?`)) {
         return;
