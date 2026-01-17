@@ -16,6 +16,11 @@
 #include <Arduino.h>
 #include <FS.h>
 
+// SRIX4K Memory Layout Constants
+#define SRIX4K_BLOCKS 128
+#define SRIX4K_BLOCK_SIZE 4
+#define SRIX4K_TOTAL_SIZE (SRIX4K_BLOCKS * SRIX4K_BLOCK_SIZE)
+
 class SRIXTool {
 public:
     enum SRIX_State {
@@ -98,8 +103,8 @@ private:
     bool _screen_drawn = false;
     uint32_t _lastReadTime = 0;
 
-    // RAM storage for 128 blocks (512 bytes)
-    uint8_t _dump[128 * 4];
+    // RAM storage for SRIX4K blocks
+    uint8_t _dump[SRIX4K_TOTAL_SIZE];
     uint8_t _uid[8];
     bool _dump_valid_from_read = false;
     bool _dump_valid_from_load = false;
