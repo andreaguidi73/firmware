@@ -715,6 +715,75 @@ void configureWebServer() {
             }
         }
     });
+
+    // MAVAI API endpoints
+    server->on("/api/mavai/info", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            request->send(200, "application/json", "{\"status\":\"MAVAI API available\",\"version\":\"1.0\"}");
+        }
+    });
+
+    server->on("/api/mavai/read", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            // Note: Actual tag reading would require hardware interaction
+            // This is a placeholder for the API structure
+            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"Tag reading requires physical hardware access\"}");
+        }
+    });
+
+    server->on("/api/mavai/credit", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            // Placeholder for credit information retrieval
+            request->send(200, "application/json", "{\"credit\":0,\"currency\":\"EUR\"}");
+        }
+    });
+
+    server->on("/api/mavai/credit", HTTP_POST, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            if (request->hasArg("amount") && request->hasArg("action")) {
+                String action = request->arg("action");
+                String amount = request->arg("amount");
+                // Placeholder for credit modification
+                request->send(200, "application/json", "{\"status\":\"success\",\"action\":\"" + action + "\",\"amount\":" + amount + "}");
+            } else {
+                request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing parameters\"}");
+            }
+        }
+    });
+
+    server->on("/api/mavai/vendor", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            // Placeholder for vendor information retrieval
+            request->send(200, "application/json", "{\"vendor\":\"0x00000000\"}");
+        }
+    });
+
+    server->on("/api/mavai/vendor", HTTP_POST, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            if (request->hasArg("vendor")) {
+                String vendor = request->arg("vendor");
+                // Placeholder for vendor import
+                request->send(200, "application/json", "{\"status\":\"success\",\"vendor\":\"" + vendor + "\"}");
+            } else {
+                request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing vendor parameter\"}");
+            }
+        }
+    });
+
+    server->on("/api/mavai/dump", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            // Placeholder for dump download
+            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"No dump loaded\"}");
+        }
+    });
+
+    server->on("/api/mavai/write", HTTP_POST, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            // Placeholder for writing dump to tag
+            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"Write requires physical hardware access\"}");
+        }
+    });
+
     server->begin();
     Serial.println("Webserver started");
 }
