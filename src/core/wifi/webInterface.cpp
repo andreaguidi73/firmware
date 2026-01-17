@@ -716,78 +716,165 @@ void configureWebServer() {
         }
     });
 
-    // MAVAI API endpoints
+    // MAVAI API endpoints - File-based dump management
+
+    // GET /api/mavai/info - API status
     server->on("/api/mavai/info", HTTP_GET, [](AsyncWebServerRequest *request) {
         if (checkUserWebAuth(request)) {
-            request->send(200, "application/json", "{\"status\":\"MAVAI API available\",\"version\":\"1.0\"}");
+            request->send(200, "application/json", "{\"status\":\"MAVAI API available\",\"version\":\"1.0\",\"mode\":\"file-based\"}");
         }
     });
 
-    server->on("/api/mavai/read", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            // Note: Actual tag reading would require hardware interaction
-            // This is a placeholder for the API structure
-            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"Tag reading requires physical hardware access\"}");
+    // GET /api/mavai/dumps - List all .mavai files
+    server->on("/api/mavai/dumps", HTTP_GET, [](AsyncWebServerRequest *request) {
+        if (!checkUserWebAuth(request)) return;
+        
+        String json = "{\"files\":[";
+        bool first = true;
+        
+        MOUNT_SD_CARD;
+        FS *fs = &SD;
+        if (!SD.exists("/BruceRFID/MAVAI")) {
+            // Try LittleFS
+            fs = &LittleFS;
         }
-    });
-
-    server->on("/api/mavai/credit", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            // Placeholder for credit information retrieval
-            request->send(200, "application/json", "{\"credit\":0,\"currency\":\"EUR\"}");
-        }
-    });
-
-    server->on("/api/mavai/credit", HTTP_POST, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            if (request->hasArg("amount") && request->hasArg("action")) {
-                String action = request->arg("action");
-                String amount = request->arg("amount");
-                // Placeholder for credit modification
-                request->send(200, "application/json", "{\"status\":\"success\",\"action\":\"" + action + "\",\"amount\":" + amount + "}");
-            } else {
-                request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing parameters\"}");
+        
+        if (fs->exists("/BruceRFID/MAVAI")) {
+            File dir = fs->open("/BruceRFID/MAVAI");
+            if (dir && dir.isDirectory()) {
+                File file = dir.openNextFile();
+                while (file) {
+                    String name = String(file.name());
+                    if (name.endsWith(".mavai") && !file.isDirectory()) {
+                        int lastSlash = name.lastIndexOf('/');
+                        if (lastSlash >= 0) name = name.substring(lastSlash + 1);
+                        if (!first) json += ",";
+                        json += "{\"name\":\"" + name + "\",\"size\":" + String(file.size()) + "}";
+                        first = false;
+                    }
+                    file = dir.openNextFile();
+                }
+                dir.close();
             }
         }
+        UNMOUNT_SD_CARD;
+        
+        json += "]}";
+        request->send(200, "application/json", json);
     });
 
-    server->on("/api/mavai/vendor", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            // Placeholder for vendor information retrieval
-            request->send(200, "application/json", "{\"vendor\":\"0x00000000\"}");
-        }
-    });
-
-    server->on("/api/mavai/vendor", HTTP_POST, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            if (request->hasArg("vendor")) {
-                String vendor = request->arg("vendor");
-                // Placeholder for vendor import
-                request->send(200, "application/json", "{\"status\":\"success\",\"vendor\":\"" + vendor + "\"}");
-            } else {
-                request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing vendor parameter\"}");
-            }
-        }
-    });
-
+    // GET /api/mavai/dump?file=xxx - Load a specific dump file content
     server->on("/api/mavai/dump", HTTP_GET, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            // Placeholder for dump download
-            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"No dump loaded\"}");
+        if (!checkUserWebAuth(request)) return;
+        
+        if (!request->hasArg("file")) {
+            request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing file parameter\"}");
+            return;
         }
+        
+        String filename = request->arg("file");
+        String filepath = "/BruceRFID/MAVAI/" + filename;
+        
+        MOUNT_SD_CARD;
+        FS *fs = &SD;
+        if (!SD.exists(filepath)) {
+            fs = &LittleFS;
+        }
+        
+        if (!fs->exists(filepath)) {
+            UNMOUNT_SD_CARD;
+            request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"File not found\"}");
+            return;
+        }
+        
+        File file = fs->open(filepath, FILE_READ);
+        if (!file) {
+            UNMOUNT_SD_CARD;
+            request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Cannot open file\"}");
+            return;
+        }
+        
+        String content = file.readString();
+        file.close();
+        UNMOUNT_SD_CARD;
+        
+        // Return raw file content for the WebGUI to parse
+        request->send(200, "text/plain", content);
     });
 
-    server->on("/api/mavai/write", HTTP_POST, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            // Placeholder for writing dump to tag
-            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"Write requires physical hardware access\"}");
+    // POST /api/mavai/dump - Save dump file (create or overwrite)
+    server->on("/api/mavai/dump", HTTP_POST, [](AsyncWebServerRequest *request) {
+        if (!checkUserWebAuth(request)) return;
+        
+        if (!request->hasArg("filename") || !request->hasArg("content")) {
+            request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing filename or content\"}");
+            return;
         }
+        
+        String filename = request->arg("filename");
+        String content = request->arg("content");
+        
+        // Ensure .mavai extension
+        if (!filename.endsWith(".mavai")) {
+            filename += ".mavai";
+        }
+        
+        String filepath = "/BruceRFID/MAVAI/" + filename;
+        
+        MOUNT_SD_CARD;
+        FS *fs = &SD;
+        if (!setupSdCard()) {
+            fs = &LittleFS;
+        }
+        
+        // Create directories if needed
+        if (!fs->exists("/BruceRFID")) fs->mkdir("/BruceRFID");
+        if (!fs->exists("/BruceRFID/MAVAI")) fs->mkdir("/BruceRFID/MAVAI");
+        
+        File file = fs->open(filepath, FILE_WRITE);
+        if (!file) {
+            UNMOUNT_SD_CARD;
+            request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Cannot create file\"}");
+            return;
+        }
+        
+        file.print(content);
+        file.close();
+        UNMOUNT_SD_CARD;
+        
+        request->send(200, "application/json", "{\"status\":\"success\",\"filename\":\"" + filename + "\"}");
     });
 
-    server->on("/api/mavai/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
-        if (checkUserWebAuth(request)) {
-            // Placeholder for resetting MyKey to factory defaults
-            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"Reset requires physical hardware access\"}");
+    // DELETE /api/mavai/dump?file=xxx - Delete a dump file
+    server->on("/api/mavai/dump", HTTP_DELETE, [](AsyncWebServerRequest *request) {
+        if (!checkUserWebAuth(request)) return;
+        
+        if (!request->hasArg("file")) {
+            request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Missing file parameter\"}");
+            return;
+        }
+        
+        String filename = request->arg("file");
+        String filepath = "/BruceRFID/MAVAI/" + filename;
+        
+        MOUNT_SD_CARD;
+        FS *fs = &SD;
+        if (!SD.exists(filepath)) {
+            fs = &LittleFS;
+        }
+        
+        if (!fs->exists(filepath)) {
+            UNMOUNT_SD_CARD;
+            request->send(404, "application/json", "{\"status\":\"error\",\"message\":\"File not found\"}");
+            return;
+        }
+        
+        if (fs->remove(filepath)) {
+            UNMOUNT_SD_CARD;
+            request->send(200, "application/json", "{\"status\":\"success\"}");
+        } else {
+            UNMOUNT_SD_CARD;
+            request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to delete file\"}");
         }
     });
 
