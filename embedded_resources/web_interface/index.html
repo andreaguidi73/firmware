@@ -16,6 +16,7 @@
       <div class="left-part">
         <button class="btn-action act-oinput" data-action="serial">Serial Cmd</button>
         <button class="btn-action act-navigation" onclick="openNavigator()">Navigator</button>
+        <button class="btn-action" onclick="openMavai()">MAVAI Tool</button>
       </div>
       <div class="right-part">
         <button class="btn-action" onclick="Dialog.show('settings')">Settings</button>
@@ -353,6 +354,138 @@
         <button class="btn-action act-save-edit-file" title="CTRL + S">Save</button>
         <button class="btn-action act-run-edit-file" title="ALT + ENTER">Run</button>
         <button class="btn-action act-dialog-close act-escape">Close</button>
+      </div>
+    </div>
+    <div class="dialog mavai hidden">
+      <div class="dialog-head">
+        <span>MAVAI Tool v1.0</span>
+        <button id="mavai-refresh" class="btn-action">
+          <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24">
+            <path
+              d="M21 12C21 16.9706 16.9706 21 12 21C9.69494 21 7.59227 20.1334 6 18.7083L3 16M3 12C3 7.02944 7.02944 3 12 3C14.3051 3 16.4077 3.86656 18 5.29168L21 8M3 21V16M3 16H8M21 3V8M21 8H16"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </button>
+      </div>
+      <div class="dialog-body">
+        <div class="mavai-panel">
+          <div class="mavai-header">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M2 17L12 22L22 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M2 12L12 17L22 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Card Information
+          </div>
+          <div class="mavai-info-grid">
+            <div class="mavai-info-item">
+              <span class="label">UID:</span>
+              <span class="value" id="mavai-uid">-</span>
+            </div>
+            <div class="mavai-info-item">
+              <span class="label">Key ID:</span>
+              <span class="value" id="mavai-keyid">-</span>
+            </div>
+            <div class="mavai-info-item highlight">
+              <span class="label">Credit:</span>
+              <span class="value" id="mavai-credit">€0.00</span>
+            </div>
+            <div class="mavai-info-item">
+              <span class="label">Vendor:</span>
+              <span class="value" id="mavai-vendor">-</span>
+            </div>
+            <div class="mavai-info-item">
+              <span class="label">Enc Key:</span>
+              <span class="value" id="mavai-enckey">-</span>
+            </div>
+            <div class="mavai-info-item">
+              <span class="label">Status:</span>
+              <span class="value" id="mavai-status">unknown</span>
+            </div>
+          </div>
+        </div>
+        <div class="mavai-panel">
+          <div class="mavai-header">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Actions
+          </div>
+          <div class="mavai-actions">
+            <div class="mavai-action-group">
+              <label>Credit Management:</label>
+              <input type="number" id="mavai-credit-input" placeholder="Amount (cents)" min="0" step="1">
+              <div>
+                <button class="btn-action" onclick="mavaiAddCredit()">Add</button>
+                <button class="btn-action" onclick="mavaiSetCredit()">Set</button>
+              </div>
+            </div>
+            <div class="mavai-action-group">
+              <label>Vendor Management:</label>
+              <input type="text" id="mavai-vendor-input" placeholder="Vendor Code (hex)">
+              <div>
+                <button class="btn-action" onclick="mavaiImportVendor()">Import</button>
+                <button class="btn-action" onclick="mavaiExportVendor()">Export</button>
+              </div>
+            </div>
+            <div class="mavai-action-group">
+              <label>Tag Operations:</label>
+              <div>
+                <button class="btn-action" onclick="mavaiReadTag()">Read Tag</button>
+                <button class="btn-action" onclick="mavaiWriteTag()">Write Tag</button>
+                <button class="btn-action btn-danger" onclick="mavaiResetKey()">Reset Key</button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mavai-panel">
+          <div class="mavai-header">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+              <polyline points="13 2 13 9 20 9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            Dump Management
+          </div>
+          <div class="mavai-dump-actions">
+            <button class="btn-action" onclick="mavaiDownloadDump()">Download Dump</button>
+            <button class="btn-action">
+              <input type="file" id="mavai-upload-input" accept=".mavai" style="display: none;" onchange="mavaiUploadDump(this.files)">
+              <span onclick="document.getElementById('mavai-upload-input').click()">Upload Dump</span>
+            </button>
+          </div>
+          <div class="mavai-dump-preview hidden" id="mavai-dump-preview">
+            <pre id="mavai-dump-content"></pre>
+            <button class="btn-action" onclick="toggleDumpView()">Show More</button>
+          </div>
+        </div>
+        <div class="mavai-status-bar" id="mavai-status-bar">
+          <span class="status-indicator"></span>
+          <span class="status-text">Ready</span>
+        </div>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn-action" onclick="Dialog.show('mavai-info')">Info</button>
+        <button class="btn-action act-dialog-close act-escape">Close</button>
+      </div>
+    </div>
+    <div class="dialog mavai-info hidden">
+      <div class="dialog-head">About MAVAI Tool</div>
+      <div class="dialog-body">
+        <p><strong>MAVAI Tool v1.0</strong></p>
+        <p>MyKey Advanced Vendor Authenticator Interface - A comprehensive NFC tool for SRIX4K MyKey card management.</p>
+        <p><strong>Features:</strong></p>
+        <ul>
+          <li>Full tag reading and writing (128 blocks)</li>
+          <li>Credit management (view, add, set)</li>
+          <li>Vendor operations (import, export)</li>
+          <li>Encryption key calculation: <code>SK = UID × Vendor × OTP</code></li>
+          <li>Factory reset functionality</li>
+          <li>Dump file management (.mavai format)</li>
+        </ul>
+        <p><strong>⚠️ Note:</strong> Physical hardware access (PN532 module with SRIX4K tags) is required for actual tag operations. Some web operations are placeholders.</p>
+      </div>
+      <div class="dialog-footer">
+        <button class="btn-action act-escape" onclick="Dialog.show('mavai')">Close</button>
       </div>
     </div>
   </div>

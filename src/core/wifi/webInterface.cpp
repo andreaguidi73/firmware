@@ -784,6 +784,13 @@ void configureWebServer() {
         }
     });
 
+    server->on("/api/mavai/reset", HTTP_POST, [](AsyncWebServerRequest *request) {
+        if (checkUserWebAuth(request)) {
+            // Placeholder for resetting MyKey to factory defaults
+            request->send(200, "application/json", "{\"status\":\"error\",\"message\":\"Reset requires physical hardware access\"}");
+        }
+    });
+
     server->begin();
     Serial.println("Webserver started");
 }
