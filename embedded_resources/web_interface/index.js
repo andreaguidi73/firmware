@@ -1575,6 +1575,15 @@ window.addEventListener('popstate', (event) => {
 // MAVAI Module - MyKey Advanced Vendor Authenticator Interface
 // ==========================================
 
+const MAVAI_EXPECTED_BLOCKS = 128;
+const MAVAI_RESET_WARNING = '⚠️ WARNING: This will FACTORY RESET the MyKey!\n\n' +
+    'This action will:\n' +
+    '- Reset vendor blocks to defaults\n' +
+    '- Clear all credit\n' +
+    '- Clear transaction history\n\n' +
+    'This CANNOT be undone!\n\n' +
+    'Are you sure?';
+
 const MAVAI = {
     dump: null,
     credit: 0,
@@ -1594,9 +1603,8 @@ function openMavai() {
 async function mavaiRefreshInfo() {
     mavaiSetStatus('loading', 'Fetching MAVAI data...');
     try {
-        // Fetch API info
-        const infoResp = await requestGet('/api/mavai/info');
-        const info = JSON.parse(infoResp);
+        // Fetch API info (validate API is available)
+        await requestGet('/api/mavai/info');
         
         // Fetch credit
         const creditResp = await requestGet('/api/mavai/credit');
@@ -1707,7 +1715,7 @@ async function mavaiSetCredit() {
     const input = document.getElementById('mavai-credit-input');
     const amount = parseInt(input.value);
     
-    if (!amount && amount !== 0) {
+    if (isNaN(amount) || amount < 0) {
         alert('Please enter a valid credit amount (in cents)');
         return;
     }
@@ -1740,12 +1748,14 @@ async function mavaiSetCredit() {
 
 async function mavaiImportVendor() {
     const input = document.getElementById('mavai-vendor-input');
-    const vendor = input.value.trim().replace(/^0x/, '');
+    const processedVendor = input.value.trim().replace(/^0x/, '');
     
-    if (!vendor || !/^[0-9A-Fa-f]{8}$/.test(vendor)) {
+    if (!processedVendor || !/^[0-9A-Fa-f]{8}$/.test(processedVendor)) {
         alert('Please enter a valid vendor code (8 hex digits)');
         return;
     }
+    
+    const vendor = processedVendor;
     
     if (!confirm(`Import vendor code: 0x${vendor.toUpperCase()}?`)) {
         return;
@@ -1845,7 +1855,7 @@ async function mavaiWriteTag() {
 }
 
 async function mavaiResetKey() {
-    if (!confirm('⚠️ WARNING: This will FACTORY RESET the MyKey!\n\nThis action will:\n- Reset vendor blocks to defaults\n- Clear all credit\n- Clear transaction history\n\nThis CANNOT be undone!\n\nAre you sure?')) {
+    if (!confirm(MAVAI_RESET_WARNING)) {
         return;
     }
     
@@ -1903,7 +1913,7 @@ function generateMavaiFile(data) {
     content += 'EncryptionKey: ' + (data.encKey || 'UNKNOWN') + '\n';
     content += 'Credit: ' + (data.credit || '0') + '\n';
     content += 'ProductionDate: ' + (data.productionDate || '00/00/0000') + '\n';
-    content += 'Blocks: ' + (data.blocks ? data.blocks.length : '128') + '\n';
+    content += 'Blocks: ' + (data.blocks ? data.blocks.length : MAVAI_EXPECTED_BLOCKS) + '\n';
     content += '# Data:\n';
     
     if (data.blocks) {
@@ -1913,7 +1923,7 @@ function generateMavaiFile(data) {
         });
     } else {
         // Generate empty blocks
-        for (let i = 0; i < 128; i++) {
+        for (let i = 0; i < MAVAI_EXPECTED_BLOCKS; i++) {
             const hexIndex = i.toString(16).toUpperCase().padStart(2, '0');
             content += '[' + hexIndex + '] 00000000\n';
         }
@@ -2011,8 +2021,8 @@ function parseMavaiFile(content) {
         }
     }
     
-    if (data.blocks.length !== 128) {
-        throw new Error('Invalid dump file: expected 128 blocks, got ' + data.blocks.length);
+    if (data.blocks.length !== MAVAI_EXPECTED_BLOCKS) {
+        throw new Error('Invalid dump file: expected ' + MAVAI_EXPECTED_BLOCKS + ' blocks, got ' + data.blocks.length);
     }
     
     return data;
