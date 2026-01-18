@@ -124,6 +124,9 @@ private:
     void writeBlockAsUint32(uint8_t blockNum, uint32_t value);
     void writeBlockToMemory(uint8_t blockNum, uint32_t value);
     
+    // Helper: Format uint32_t as 8-character uppercase hex string with leading zeros
+    String toHex32(uint32_t value);
+    
 private:
 // PN532 for SRIX - uses IRQ/RST if board has them defined
 #if defined(PN532_IRQ) && defined(PN532_RF_REST)
