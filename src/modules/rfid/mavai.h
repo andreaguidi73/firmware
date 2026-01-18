@@ -29,9 +29,13 @@
 #define MYKEY_BLOCK_VENDOR2_BACKUP 0x1D
 #define MYKEY_BLOCK_CREDIT1 0x21
 #define MYKEY_BLOCK_CREDIT2 0x25
+#define MYKEY_BLOCK_PREVCREDIT1 0x23
+#define MYKEY_BLOCK_PREVCREDIT2 0x27
 #define MYKEY_BLOCK_TRANS_START 0x34
 #define MYKEY_BLOCK_TRANS_END 0x3B
 #define MYKEY_BLOCK_TRANS_PTR 0x3C
+#define MYKEY_TRANS_HISTORY_SIZE 8  // Transaction buffer holds 8 entries (0-7)
+#define MYKEY_TRANS_TOTAL_BLOCKS 9  // Total blocks including pointer (0x34-0x3C)
 
 // Reset values for detection
 #define MYKEY_BLOCK18_RESET 0x8FCD0F48
@@ -80,6 +84,7 @@ private:
     
     // MyKey - Security and validation
     bool checkLockID();
+    bool isLocked();
     uint8_t getCurrentTransactionOffset();
     
     // MyKey - Key information

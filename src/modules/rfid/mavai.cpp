@@ -907,10 +907,10 @@ void MAVAITool::calculateEncryptionKey() {
     // 1. OTP Calculation - BYTE SWAP + TWO'S COMPLEMENT
     uint32_t block6 = readBlockAsUint32(MYKEY_BLOCK_OTP);  // 0x06
     // Byte swap: reverse byte order
-    uint32_t otpSwapped = (block6 << 24) | 
-                          ((block6 & 0x0000FF00) << 8) |
-                          ((block6 & 0x00FF0000) >> 8) | 
-                          (block6 >> 24);
+    uint32_t otpSwapped = ((block6 & 0x000000FF) << 24) | 
+                          ((block6 & 0x0000FF00) << 8)  |
+                          ((block6 & 0x00FF0000) >> 8)  | 
+                          ((block6 & 0xFF000000) >> 24);
     uint32_t otp = ~otpSwapped + 1;  // Two's complement (NOT + 1)
     
     // 2. Vendor Extraction - DECODE FIRST, EXTRACT LOW 16 BITS, +1
@@ -923,7 +923,9 @@ void MAVAITool::calculateEncryptionKey() {
     
     // Extract LOW 16 bits from each, combine, ADD 1
     uint32_t vendor = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
-    vendor += 1;  // CRITICAL: +1 after extraction!
+    vendor += 1;  // CRITICAL: +1 after extraction for encryption key only!
+    
+    // Note: blocks are not re-encoded because we only used temporary copies
     
     // 3. UID - Use FULL 64-bit value
     uint64_t uid = getUidAsUint64();
@@ -1035,29 +1037,103 @@ uint16_t MAVAITool::getPreviousCredit() {
 bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t year) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
+    // Preliminary checks
+    if (isLocked()) {
+        displayError("Key has lock ID protection!");
+        return false;
+    }
+    if (isReset()) {
+        displayError("Key is not associated with vendor!");
+        return false;
+    }
+    if (readBlockAsUint32(MYKEY_BLOCK_OTP) == 0) {
+        displayError("Key OTP is zero - not initialized!");
+        return false;
+    }
+    
     if (!_vendorCalculated) calculateEncryptionKey();
     
-    // Get current credit
-    uint16_t currentCredit = getCurrentCredit();
+    uint16_t precedentCredit;
+    uint16_t actualCredit = getCurrentCredit();
+    uint8_t current = getCurrentTransactionOffset();
     
-    // Calculate new credit
-    uint16_t newCredit = currentCredit + cents;
+    // Transaction splitting loop - exactly like MIKAI!
+    do {
+        precedentCredit = actualCredit;
+        
+        if (cents >= 200) {
+            cents -= 200;
+            actualCredit += 200;
+        } else if (cents >= 100) {
+            cents -= 100;
+            actualCredit += 100;
+        } else if (cents >= 50) {
+            cents -= 50;
+            actualCredit += 50;
+        } else if (cents >= 20) {
+            cents -= 20;
+            actualCredit += 20;
+        } else if (cents >= 10) {
+            cents -= 10;
+            actualCredit += 10;
+        } else if (cents >= 5) {
+            cents -= 5;
+            actualCredit += 5;
+        } else {
+            actualCredit += cents;
+            cents = 0;
+        }
+        
+        // Update transaction pointer (circular 0-7)
+        current = (current == (MYKEY_TRANS_HISTORY_SIZE - 1)) ? 0 : current + 1;
+        
+        // Safety check: ensure offset is in valid range
+        if (current >= MYKEY_TRANS_HISTORY_SIZE) {
+            displayError("Transaction offset out of range!");
+            return false;
+        }
+        
+        // Save transaction history block (0x34 + offset)
+        uint32_t txBlock = ((uint32_t)day << 27) | 
+                          ((uint32_t)month << 23) | 
+                          ((uint32_t)(year % 100) << 16) | 
+                          actualCredit;
+        writeBlockToMemory(0x34 + current, txBlock);
+        
+    } while (cents > 0);
     
-    // Build credit block
-    uint32_t creditBlock = newCredit;  // Only LOW 16 bits
+    // ========== SAVE FINAL CREDIT TO 0x21 AND 0x25 ==========
+    uint32_t creditBlock = actualCredit;
     calculateBlockChecksum(&creditBlock, 0x21);
     encodeDecodeBlock(&creditBlock);
     creditBlock ^= _encryptionKey;
-    
     writeBlockToMemory(0x21, creditBlock);
     
-    // Same for backup block 0x25
-    creditBlock = newCredit;
+    creditBlock = actualCredit;
     calculateBlockChecksum(&creditBlock, 0x25);
     encodeDecodeBlock(&creditBlock);
     creditBlock ^= _encryptionKey;
-    
     writeBlockToMemory(0x25, creditBlock);
+    
+    // ========== SAVE PREVIOUS CREDIT TO 0x23 AND 0x27 ==========
+    uint32_t prevCreditBlock = precedentCredit;
+    calculateBlockChecksum(&prevCreditBlock, 0x23);
+    encodeDecodeBlock(&prevCreditBlock);
+    writeBlockToMemory(0x23, prevCreditBlock);
+    
+    prevCreditBlock = precedentCredit;
+    calculateBlockChecksum(&prevCreditBlock, 0x27);
+    encodeDecodeBlock(&prevCreditBlock);
+    writeBlockToMemory(0x27, prevCreditBlock);
+    
+    // ========== SAVE TRANSACTION POINTER TO 0x3C ==========
+    uint32_t ptrBlock = (uint32_t)current << 16;
+    calculateBlockChecksum(&ptrBlock, 0x3C);
+    encodeDecodeBlock(&ptrBlock);
+    // XOR with Key ID lower 3 bytes
+    uint32_t keyID = readBlockAsUint32(MYKEY_BLOCK_KEYID);
+    ptrBlock ^= (keyID & 0x00FFFFFF);
+    writeBlockToMemory(MYKEY_BLOCK_TRANS_PTR, ptrBlock);
     
     return true;
 }
@@ -1066,23 +1142,39 @@ bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
 bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t year) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
+    // Safety check: ensure constant is valid
+    static_assert(MYKEY_TRANS_TOTAL_BLOCKS == 9, "Transaction block count must be 9 (0x34-0x3C)");
+    
+    // Backup current state in case of failure
+    uint32_t backup21 = readBlockAsUint32(0x21);
+    uint32_t backupTx[MYKEY_TRANS_TOTAL_BLOCKS];
+    for (int i = 0; i < MYKEY_TRANS_TOTAL_BLOCKS; i++) {
+        backupTx[i] = readBlockAsUint32(MYKEY_BLOCK_TRANS_START + i);
+    }
+    
     if (!_vendorCalculated) calculateEncryptionKey();
     
-    // Build credit block
-    uint32_t creditBlock = cents;  // Only LOW 16 bits
-    calculateBlockChecksum(&creditBlock, 0x21);
-    encodeDecodeBlock(&creditBlock);
-    creditBlock ^= _encryptionKey;
+    // Reset credit block 0x21 to 0
+    uint32_t zeroCredit = 0;
+    calculateBlockChecksum(&zeroCredit, 0x21);
+    encodeDecodeBlock(&zeroCredit);
+    zeroCredit ^= _encryptionKey;
+    writeBlockToMemory(0x21, zeroCredit);
     
-    writeBlockToMemory(0x21, creditBlock);
+    // Reset transaction history (0x34-0x3C) to 0xFFFFFFFF
+    for (int i = 0x34; i <= 0x3C; i++) {
+        writeBlockToMemory(i, 0xFFFFFFFF);
+    }
     
-    // Same for backup block 0x25
-    creditBlock = cents;
-    calculateBlockChecksum(&creditBlock, 0x25);
-    encodeDecodeBlock(&creditBlock);
-    creditBlock ^= _encryptionKey;
-    
-    writeBlockToMemory(0x25, creditBlock);
+    // Now add the cents using addCents
+    if (!addCents(cents, day, month, year)) {
+        // Restore backup on failure
+        writeBlockToMemory(0x21, backup21);
+        for (int i = 0; i < MYKEY_TRANS_TOTAL_BLOCKS; i++) {
+            writeBlockToMemory(MYKEY_BLOCK_TRANS_START + i, backupTx[i]);
+        }
+        return false;
+    }
     
     return true;
 }
@@ -1095,13 +1187,32 @@ bool MAVAITool::checkLockID() {
     return (block05 & 0x000000FF) == 0x7F;
 }
 
+// Check if key has lock ID protection (compatibility alias)
+bool MAVAITool::isLocked() {
+    return checkLockID();
+}
+
 // Get current transaction offset (block 0x3C)
 uint8_t MAVAITool::getCurrentTransactionOffset() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
-    uint32_t block3C = readBlockAsUint32(MYKEY_BLOCK_TRANS_PTR);
+    uint32_t block3C = readBlockAsUint32(MYKEY_BLOCK_TRANS_PTR);  // 0x3C
     
-    return block3C & 0x07;
+    // If first transaction (never used), return 7 to start at position 0
+    if (block3C == 0xFFFFFFFF) {
+        return MYKEY_TRANS_HISTORY_SIZE - 1;
+    }
+    
+    // Decode: XOR with Key ID lower 3 bytes, then encodeDecodeBlock
+    uint32_t keyID = readBlockAsUint32(MYKEY_BLOCK_KEYID);  // 0x07
+    uint32_t decoded = block3C ^ (keyID & 0x00FFFFFF);
+    encodeDecodeBlock(&decoded);
+    
+    // Extract offset from bits 16-23
+    uint8_t offset = (decoded >> 16) & 0xFF;
+    
+    // Validate range 0-7
+    return (offset >= MYKEY_TRANS_HISTORY_SIZE) ? (MYKEY_TRANS_HISTORY_SIZE - 1) : offset;
 }
 
 // Get Key ID from block 0x07
