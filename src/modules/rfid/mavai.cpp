@@ -1106,8 +1106,7 @@ uint16_t MAVAITool::getCurrentCredit() {
 uint16_t MAVAITool::getPreviousCredit() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
-    if (!_vendorCalculated) calculateEncryptionKey();
-    
+    // No need to calculate encryption key - previous credit doesn't use XOR encryption
     uint32_t prevCreditBlock = readBlockAsUint32(MYKEY_BLOCK_PREVCREDIT1);  // 0x23
     encodeDecodeBlock(&prevCreditBlock);    // Decode only - no XOR needed for previous credit
     return (uint16_t)(prevCreditBlock & 0xFFFF);  // Return LOW 16 bits only
