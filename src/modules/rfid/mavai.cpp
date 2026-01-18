@@ -602,10 +602,71 @@ void MAVAITool::save_file() {
     bool lockIdSet = (block5 & 0x000000FF) == 0x7F;
     bool isBound = !isReset();
     
-    // Countdown counter (blocks 0x05 and 0x06 contain counter info)
-    // Block 0x05: bits 8-31 contain part of counter
-    // Block 0x06: OTP/counter area
-    uint32_t countdownCounter = block5 >> 8;  // Upper 24 bits of block 5
+    // ===== COUNTDOWN COUNTER (Days since 1/1/1995 to production date) =====
+    // Stored in BCD format in blocks 0x10, 0x14, 0x3F, 0x43
+    // Block format: [CHECKSUM][KEY_ID_BYTE][DAYS_BCD_HIGH][DAYS_BCD_LOW]
+    
+    uint32_t countdownCounter = 0;
+    bool countdownValid = false;
+    String countdownSource = "";
+    
+    // Read from the four possible blocks
+    uint32_t block10 = readBlockAsUint32(0x10);
+    uint32_t block14 = readBlockAsUint32(0x14);
+    uint32_t block3F = readBlockAsUint32(0x3F);
+    uint32_t block43 = readBlockAsUint32(0x43);
+    
+    // Find first valid block (not 0xFFFFFFFF)
+    uint32_t counterBlock = 0xFFFFFFFF;
+    uint8_t counterBlockNum = 0;
+    
+    if (block10 != 0xFFFFFFFF) {
+        counterBlock = block10;
+        counterBlockNum = 0x10;
+        countdownSource = "0x10";
+    } else if (block14 != 0xFFFFFFFF) {
+        counterBlock = block14;
+        counterBlockNum = 0x14;
+        countdownSource = "0x14";
+    } else if (block3F != 0xFFFFFFFF) {
+        counterBlock = block3F;
+        counterBlockNum = 0x3F;
+        countdownSource = "0x3F";
+    } else if (block43 != 0xFFFFFFFF) {
+        counterBlock = block43;
+        counterBlockNum = 0x43;
+        countdownSource = "0x43";
+    }
+    
+    if (counterBlock != 0xFFFFFFFF) {
+        // Extract BCD value from lower 2 bytes (bytes 2 and 3)
+        // Block format: [CHECK][ID][DAYS_H][DAYS_L]
+        uint8_t daysHigh = (counterBlock >> 8) & 0xFF;  // Byte 2: thousands & hundreds
+        uint8_t daysLow = counterBlock & 0xFF;          // Byte 3: tens & units
+        
+        // Decode BCD to decimal
+        // daysHigh = 0x49 means 4 (thousands) and 9 (hundreds) = 4900
+        // daysLow = 0x26 means 2 (tens) and 6 (units) = 26
+        // Total = 4926 days
+        
+        uint32_t thousands = (daysHigh >> 4) & 0x0F;
+        uint32_t hundreds = daysHigh & 0x0F;
+        uint32_t tens = (daysLow >> 4) & 0x0F;
+        uint32_t units = daysLow & 0x0F;
+        
+        // Validate BCD digits (each must be 0-9)
+        if (thousands <= 9 && hundreds <= 9 && tens <= 9 && units <= 9) {
+            countdownCounter = thousands * 1000 + hundreds * 100 + tens * 10 + units;
+            countdownValid = true;
+        }
+    }
+    
+    // Debug output
+    Serial.printf("DEBUG Counter: block10=0x%08X block14=0x%08X block3F=0x%08X block43=0x%08X\n", 
+                  block10, block14, block3F, block43);
+    Serial.printf("DEBUG Counter: using block %s, value=%u days\n", 
+                  countdownSource.c_str(), countdownCounter);
+    
     
     // Write enhanced header v1.2
     file.println("Filetype: Bruce MAVAI Dump");
@@ -620,8 +681,18 @@ void MAVAITool::save_file() {
     file.println("LockID: " + String(lockIdSet ? "LOCKED" : "OK"));
     file.println("LockID_Raw: " + String(block5 & 0xFF, HEX));
     file.println("Bound: " + String(isBound ? "YES" : "NO"));
-    file.println("CountdownCounter: " + String(countdownCounter));
-    file.println("CountdownCounter_Hex: " + String(countdownCounter, HEX));
+    
+    // Countdown counter - days since 1/1/1995 to production date
+    if (countdownValid) {
+        file.println("DaysElapsed: " + String(countdownCounter));
+        file.println("DaysElapsed_Source: Block " + countdownSource);
+        file.println("DaysElapsed_Block10_Raw: " + String(block10, HEX));
+        file.println("DaysElapsed_Block14_Raw: " + String(block14, HEX));
+    } else {
+        file.println("DaysElapsed: INVALID");
+        file.println("DaysElapsed_Block10_Raw: " + String(block10, HEX));
+        file.println("DaysElapsed_Block14_Raw: " + String(block14, HEX));
+    }
     
     file.println("# === OTP CALCULATION ===");
     file.println("OTP_Block6_Raw: " + String(block6, HEX));
@@ -1364,7 +1435,7 @@ uint16_t MAVAITool::getDaysSinceProduction() {
     return (cur_days > prod_days) ? (cur_days - prod_days) : 0;
 }
 
-// Calculate days from 1/1/1995
+// Calculate days from 1/1/1995 - simple implementation
 uint16_t MAVAITool::daysDifference(uint8_t day, uint8_t month, uint16_t year) {
     const uint16_t baseYear = 1995;
     
@@ -1391,6 +1462,47 @@ uint16_t MAVAITool::daysDifference(uint8_t day, uint8_t month, uint16_t year) {
     totalDays += day - 1;
     
     return (uint16_t)totalDays;
+}
+
+// Calculate days since 1/1/1995 using MIKAI algorithm
+uint32_t MAVAITool::daysSince1995(uint8_t day, uint8_t month, uint16_t year) {
+    // From MIKAI mykey.c daysDifference()
+    if (month < 3) {
+        year--;
+        month += 12;
+    }
+    return year * 365 + year / 4 - year / 100 + year / 400 + (month * 153 + 3) / 5 + day - 728692;
+}
+
+// Read days elapsed from counter blocks (0x10, 0x14, 0x3F, 0x43)
+uint32_t MAVAITool::getDaysElapsed() {
+    // Try each block in order
+    uint32_t blocks[] = {
+        readBlockAsUint32(0x10),
+        readBlockAsUint32(0x14),
+        readBlockAsUint32(0x3F),
+        readBlockAsUint32(0x43)
+    };
+    
+    for (int i = 0; i < 4; i++) {
+        if (blocks[i] != 0xFFFFFFFF) {
+            // Extract BCD from lower 2 bytes
+            uint8_t daysHigh = (blocks[i] >> 8) & 0xFF;
+            uint8_t daysLow = blocks[i] & 0xFF;
+            
+            uint32_t thousands = (daysHigh >> 4) & 0x0F;
+            uint32_t hundreds = daysHigh & 0x0F;
+            uint32_t tens = (daysLow >> 4) & 0x0F;
+            uint32_t units = daysLow & 0x0F;
+            
+            // Validate BCD
+            if (thousands <= 9 && hundreds <= 9 && tens <= 9 && units <= 9) {
+                return thousands * 1000 + hundreds * 100 + tens * 10 + units;
+            }
+        }
+    }
+    
+    return 0; // Invalid or not found
 }
 
 // Reset key to factory defaults
