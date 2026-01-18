@@ -1358,7 +1358,6 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     
     return true;
 }
-}
 
 // Check Lock ID protection (block 0x05)
 bool MAVAITool::checkLockID() {
