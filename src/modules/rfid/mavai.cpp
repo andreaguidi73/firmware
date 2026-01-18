@@ -833,24 +833,29 @@ uint32_t MAVAITool::getUidForEncryption() {
            ((uint32_t)_uid[1] << 8) | (uint32_t)_uid[0];
 }
 
-// Helper: Read a block as uint32_t (little-endian from SRIX4K)
+// Helper: Read a block as uint32_t (BIG-ENDIAN from SRIX4K)
 uint32_t MAVAITool::readBlockAsUint32(uint8_t blockNum) {
     if (blockNum >= SRIX4K_BLOCKS) return 0;
     uint8_t *ptr = &_dump[blockNum * SRIX_BLOCK_LENGTH];
-    // Read as little-endian (SRIX4K native format)
-    return ((uint32_t)ptr[3] << 24) | ((uint32_t)ptr[2] << 16) |
-           ((uint32_t)ptr[1] << 8) | (uint32_t)ptr[0];
+    // Read as BIG-ENDIAN: ptr[0] = MSB
+    return ((uint32_t)ptr[0] << 24) | ((uint32_t)ptr[1] << 16) |
+           ((uint32_t)ptr[2] << 8) | (uint32_t)ptr[3];
 }
 
-// Helper: Write a uint32_t to a block (little-endian to SRIX4K)
+// Helper: Write a uint32_t to a block (BIG-ENDIAN to SRIX4K)
 void MAVAITool::writeBlockAsUint32(uint8_t blockNum, uint32_t value) {
     if (blockNum >= SRIX4K_BLOCKS) return;
     uint8_t *ptr = &_dump[blockNum * SRIX_BLOCK_LENGTH];
-    // Write as little-endian (SRIX4K native format)
-    ptr[0] = (uint8_t)(value & 0xFF);
-    ptr[1] = (uint8_t)((value >> 8) & 0xFF);
-    ptr[2] = (uint8_t)((value >> 16) & 0xFF);
-    ptr[3] = (uint8_t)((value >> 24) & 0xFF);
+    // Write as BIG-ENDIAN: ptr[0] = MSB
+    ptr[0] = (uint8_t)((value >> 24) & 0xFF);
+    ptr[1] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[3] = (uint8_t)(value & 0xFF);
+}
+
+// Helper: Write uint32_t to memory (alias for consistency with problem statement)
+void MAVAITool::writeBlockToMemory(uint8_t blockNum, uint32_t value) {
+    writeBlockAsUint32(blockNum, value);
 }
 
 // Cryptographic function: XOR-based bit swapping for obfuscation
@@ -878,16 +883,17 @@ void MAVAITool::encodeDecodeBlock(uint32_t *block) {
 void MAVAITool::calculateBlockChecksum(uint32_t *block, uint8_t blockNum) {
     if (!block) return;
     
-    uint8_t sum = 0;
-    uint32_t data = *block & 0xFFFFFF00;
+    // Sum only nibbles 0-5 (bits 0-23)
+    uint8_t checksum = 0xFF - blockNum 
+                       - (*block & 0x0F)
+                       - ((*block >> 4) & 0x0F)
+                       - ((*block >> 8) & 0x0F)
+                       - ((*block >> 12) & 0x0F)
+                       - ((*block >> 16) & 0x0F)
+                       - ((*block >> 20) & 0x0F);
     
-    // Sum all nibbles from the upper 3 bytes
-    for (int i = 1; i < 8; i++) {
-        sum += (data >> (i * 4)) & 0x0F;
-    }
-    
-    uint8_t checksum = 0xFF - blockNum - sum;
-    *block = data | checksum;
+    // Clear high byte, set checksum
+    *block = (*block & 0x00FFFFFF) | ((uint32_t)checksum << 24);
 }
 
 // Calculate encryption key: SK = (UID × Vendor × OTP)
@@ -898,36 +904,33 @@ void MAVAITool::calculateEncryptionKey() {
         return;
     }
     
-    // Get OTP from block 0x06
-    uint32_t otp = readBlockAsUint32(MYKEY_BLOCK_OTP);
-    if (otp == 0) {
-        _encryptionKey = 0;
-        _vendorCalculated = false;
-        return;
-    }
+    // 1. OTP Calculation - BYTE SWAP + TWO'S COMPLEMENT
+    uint32_t block6 = readBlockAsUint32(MYKEY_BLOCK_OTP);  // 0x06
+    // Byte swap: reverse byte order
+    uint32_t otpSwapped = (block6 << 24) | 
+                          ((block6 & 0x0000FF00) << 8) |
+                          ((block6 & 0x00FF0000) >> 8) | 
+                          (block6 >> 24);
+    uint32_t otp = ~otpSwapped + 1;  // Two's complement (NOT + 1)
     
-    // OTP calculation with byte swap and two's complement
-    otp = ~((otp << 24) | ((otp & 0x0000FF00) << 8) |
-            ((otp & 0x00FF0000) >> 8) | (otp >> 24)) + 1;
+    // 2. Vendor Extraction - DECODE FIRST, EXTRACT LOW 16 BITS, +1
+    uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);  // 0x18
+    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);  // 0x19
     
-    // Read and decode vendor blocks to extract vendor
-    uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
+    // Decode blocks temporarily
     encodeDecodeBlock(&block18);
-    uint16_t vendorHigh = (block18 >> 16) & 0xFFFF;
-    
-    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
     encodeDecodeBlock(&block19);
-    uint16_t vendorLow = (block19 >> 16) & 0xFFFF;
     
-    // Reconstruct vendor (stored as vendor-1)
-    uint32_t vendorRaw = ((uint32_t)vendorHigh << 16) | vendorLow;
-    uint32_t vendor = vendorRaw + 1;
-    _currentVendor = vendor;
+    // Extract LOW 16 bits from each, combine, ADD 1
+    uint32_t vendor = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
+    vendor += 1;  // CRITICAL: +1 after extraction!
     
-    // Calculate encryption key using 4-byte UID (truncated to 32-bit)
-    uint32_t uid = getUidForEncryption();
-    uint64_t key64 = (uint64_t)uid * (uint64_t)vendor * (uint64_t)otp;
-    _encryptionKey = (uint32_t)(key64 & 0xFFFFFFFF);
+    // 3. UID - Use FULL 64-bit value
+    uint64_t uid = getUidAsUint64();
+    
+    // 4. Final calculation: SK = UID * vendor * OTP (truncated to 32-bit)
+    _encryptionKey = (uint32_t)(uid * vendor * otp);
+    
     _vendorCalculated = true;
 }
 
@@ -935,44 +938,44 @@ void MAVAITool::calculateEncryptionKey() {
 void MAVAITool::importVendor(uint32_t vendor) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return;
     
-    // Vendor is stored as (vendor - 1)
-    uint32_t vendorMinusOne = vendor - 1;
+    // 1. Decode credit blocks with OLD encryption key
+    if (!_vendorCalculated) calculateEncryptionKey();
+    uint32_t credit21 = readBlockAsUint32(0x21);
+    uint32_t credit25 = readBlockAsUint32(0x25);
+    credit21 ^= _encryptionKey;
+    credit25 ^= _encryptionKey;
     
-    // Split into upper 16 bits and lower 16 bits
-    uint16_t vendorHigh = (vendorMinusOne >> 16) & 0xFFFF;
-    uint16_t vendorLow = vendorMinusOne & 0xFFFF;
-    
-    // Prepare block 0x18: vendor high in upper 16 bits
-    uint32_t block18 = ((uint32_t)vendorHigh << 16);
+    // 2. Create new vendor blocks with checksum and encoding
+    uint32_t block18 = (vendor >> 16) & 0x0000FFFF;  // HIGH 16 bits
     calculateBlockChecksum(&block18, 0x18);
-    
-    // Prepare block 0x19: vendor low in upper 16 bits
-    uint32_t block19 = ((uint32_t)vendorLow << 16);
-    calculateBlockChecksum(&block19, 0x19);
-    
-    // Encode for storage
     encodeDecodeBlock(&block18);
+    writeBlockToMemory(0x18, block18);
+    
+    uint32_t block19 = vendor & 0x0000FFFF;  // LOW 16 bits
+    calculateBlockChecksum(&block19, 0x19);
     encodeDecodeBlock(&block19);
+    writeBlockToMemory(0x19, block19);
     
-    // Write primary vendor (blocks 0x18, 0x19)
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR1, block18);
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR2, block19);
-    
-    // Prepare backup blocks with CORRECT block numbers for checksum
-    uint32_t block1C = ((uint32_t)vendorHigh << 16);
-    calculateBlockChecksum(&block1C, 0x1C);  // Block 0x1C checksum
-    encodeDecodeBlock(&block1C);
-    
-    uint32_t block1D = ((uint32_t)vendorLow << 16);
-    calculateBlockChecksum(&block1D, 0x1D);  // Block 0x1D checksum
-    encodeDecodeBlock(&block1D);
-    
-    // Write backup vendor (blocks 0x1C, 0x1D)
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR1_BACKUP, block1C);
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR2_BACKUP, block1D);
-    
-    _currentVendor = vendor;
+    // 3. Recalculate encryption key with NEW vendor
     _vendorCalculated = false;
+    calculateEncryptionKey();
+    
+    // 4. Re-encode credit blocks with NEW encryption key
+    credit21 ^= _encryptionKey;
+    credit25 ^= _encryptionKey;
+    writeBlockToMemory(0x21, credit21);
+    writeBlockToMemory(0x25, credit25);
+    
+    // 5. Mirror to backup blocks 0x1C/0x1D
+    uint32_t block1C = (vendor >> 16) & 0x0000FFFF;
+    calculateBlockChecksum(&block1C, 0x1C);
+    encodeDecodeBlock(&block1C);
+    writeBlockToMemory(0x1C, block1C);
+    
+    uint32_t block1D = vendor & 0x0000FFFF;
+    calculateBlockChecksum(&block1D, 0x1D);
+    encodeDecodeBlock(&block1D);
+    writeBlockToMemory(0x1D, block1D);
 }
 
 // Export vendor code
@@ -983,22 +986,15 @@ void MAVAITool::exportVendor(uint32_t *vendor) {
         return;
     }
     
-    // Read and decode block 0x18
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
-    encodeDecodeBlock(&block18);
-    uint16_t vendorHigh = (block18 >> 16) & 0xFFFF;
-    
-    // Read and decode block 0x19
     uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
+    
+    // Decode temporarily
+    encodeDecodeBlock(&block18);
     encodeDecodeBlock(&block19);
-    uint16_t vendorLow = (block19 >> 16) & 0xFFFF;
     
-    // Concatenate: vendorHigh (upper 16 bits) + vendorLow (lower 16 bits)
-    // Example: ABCD + 1234 = ABCD1234
-    uint32_t vendorRaw = ((uint32_t)vendorHigh << 16) | vendorLow;
-    
-    // Stored as vendor-1, so add 1 to get actual vendor
-    *vendor = vendorRaw + 1;
+    // Extract LOW 16 bits from each, combine (NO +1!)
+    *vendor = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
 }
 
 // Check if key is in factory reset state
@@ -1015,37 +1011,31 @@ bool MAVAITool::isReset() {
 uint16_t MAVAITool::getCurrentCredit() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
-    uint32_t block21 = readBlockAsUint32(MYKEY_BLOCK_CREDIT1);
-    if (block21 == 0) return 0;
+    if (!_vendorCalculated) calculateEncryptionKey();
     
-    // Decode block
-    encodeDecodeBlock(&block21);
-    
-    // Extract credit from upper 16 bits (in cents)
-    uint16_t credit = (block21 >> 16) & 0xFFFF;
-    
-    return credit; // Return in cents, UI divides by 100 for EUR display
+    uint32_t creditBlock = readBlockAsUint32(MYKEY_BLOCK_CREDIT1);  // 0x21
+    creditBlock ^= _encryptionKey;      // 1. XOR with encryption key
+    encodeDecodeBlock(&creditBlock);    // 2. Decode
+    return (uint16_t)(creditBlock & 0xFFFF);  // 3. Return LOW 16 bits only
 }
 
 // Get previous credit from block 0x25
 uint16_t MAVAITool::getPreviousCredit() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
-    uint32_t block25 = readBlockAsUint32(MYKEY_BLOCK_CREDIT2);
-    if (block25 == 0) return 0;
+    if (!_vendorCalculated) calculateEncryptionKey();
     
-    // Decode block
-    encodeDecodeBlock(&block25);
-    
-    // Extract credit from upper 16 bits
-    uint16_t credit = (block25 >> 16) & 0xFFFF;
-    
-    return credit;
+    uint32_t creditBlock = readBlockAsUint32(MYKEY_BLOCK_CREDIT2);  // 0x25
+    creditBlock ^= _encryptionKey;      // 1. XOR with encryption key
+    encodeDecodeBlock(&creditBlock);    // 2. Decode
+    return (uint16_t)(creditBlock & 0xFFFF);  // 3. Return LOW 16 bits only
 }
 
 // Add cents with transaction splitting
 bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t year) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
+    
+    if (!_vendorCalculated) calculateEncryptionKey();
     
     // Get current credit
     uint16_t currentCredit = getCurrentCredit();
@@ -1053,23 +1043,21 @@ bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     // Calculate new credit
     uint16_t newCredit = currentCredit + cents;
     
-    // Prepare new block data
-    uint32_t newBlock = ((uint32_t)newCredit << 16) | (daysDifference(day, month, year) & 0xFFFF);
+    // Build credit block
+    uint32_t creditBlock = newCredit;  // Only LOW 16 bits
+    calculateBlockChecksum(&creditBlock, 0x21);
+    encodeDecodeBlock(&creditBlock);
+    creditBlock ^= _encryptionKey;
     
-    // Encode and write to block 0x21
-    encodeDecodeBlock(&newBlock);
-    writeBlockAsUint32(MYKEY_BLOCK_CREDIT1, newBlock);
+    writeBlockToMemory(0x21, creditBlock);
     
-    // Update transaction history
-    uint8_t txOffset = getCurrentTransactionOffset();
-    if (txOffset < 8) {
-        uint32_t txData = ((uint32_t)cents << 16) | (daysDifference(day, month, year) & 0xFFFF);
-        encodeDecodeBlock(&txData);
-        writeBlockAsUint32(MYKEY_BLOCK_TRANS_START + txOffset, txData);
-        
-        // Increment transaction pointer
-        writeBlockAsUint32(MYKEY_BLOCK_TRANS_PTR, (txOffset + 1) % 8);
-    }
+    // Same for backup block 0x25
+    creditBlock = newCredit;
+    calculateBlockChecksum(&creditBlock, 0x25);
+    encodeDecodeBlock(&creditBlock);
+    creditBlock ^= _encryptionKey;
+    
+    writeBlockToMemory(0x25, creditBlock);
     
     return true;
 }
@@ -1078,12 +1066,23 @@ bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
 bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t year) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
-    // Prepare new block data
-    uint32_t newBlock = ((uint32_t)cents << 16) | (daysDifference(day, month, year) & 0xFFFF);
+    if (!_vendorCalculated) calculateEncryptionKey();
     
-    // Encode and write to block 0x21
-    encodeDecodeBlock(&newBlock);
-    writeBlockAsUint32(MYKEY_BLOCK_CREDIT1, newBlock);
+    // Build credit block
+    uint32_t creditBlock = cents;  // Only LOW 16 bits
+    calculateBlockChecksum(&creditBlock, 0x21);
+    encodeDecodeBlock(&creditBlock);
+    creditBlock ^= _encryptionKey;
+    
+    writeBlockToMemory(0x21, creditBlock);
+    
+    // Same for backup block 0x25
+    creditBlock = cents;
+    calculateBlockChecksum(&creditBlock, 0x25);
+    encodeDecodeBlock(&creditBlock);
+    creditBlock ^= _encryptionKey;
+    
+    writeBlockToMemory(0x25, creditBlock);
     
     return true;
 }
@@ -1093,10 +1092,7 @@ bool MAVAITool::checkLockID() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
     uint32_t block05 = readBlockAsUint32(MYKEY_BLOCK_LOCKID);
-    
-    // Check if first byte is 0x7F (locked)
-    uint8_t lockByte = (block05 >> 24) & 0xFF;
-    return (lockByte == 0x7F);
+    return (block05 & 0x000000FF) == 0x7F;
 }
 
 // Get current transaction offset (block 0x3C)
@@ -1120,20 +1116,17 @@ String MAVAITool::getProductionDate() {
     
     uint32_t block08 = readBlockAsUint32(MYKEY_BLOCK_PRODDATE);
     
-    // Extract BCD values (assuming format: DDMMYYYY in BCD)
+    // BCD decoding
     uint8_t day = ((block08 >> 28) & 0x0F) * 10 + ((block08 >> 24) & 0x0F);
     uint8_t month = ((block08 >> 20) & 0x0F) * 10 + ((block08 >> 16) & 0x0F);
-    uint16_t year = ((block08 >> 12) & 0x0F) * 1000 + ((block08 >> 8) & 0x0F) * 100 + 
-                    ((block08 >> 4) & 0x0F) * 10 + (block08 & 0x0F);
+    uint16_t year = ((block08 & 0x0F) * 1000) + 
+                    (((block08 >> 4) & 0x0F) * 100) +
+                    (((block08 >> 12) & 0x0F) * 10) + 
+                    ((block08 >> 8) & 0x0F);
     
-    // Format as DD/MM/YYYY
-    String result = "";
-    if (day < 10) result += "0";
-    result += String(day) + "/";
-    if (month < 10) result += "0";
-    result += String(month) + "/" + String(year);
-    
-    return result;
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%02d/%02d/%04d", day, month, year);
+    return String(buf);
 }
 
 // Get days since production
@@ -1142,11 +1135,13 @@ uint16_t MAVAITool::getDaysSinceProduction() {
     
     uint32_t block08 = readBlockAsUint32(MYKEY_BLOCK_PRODDATE);
     
-    // Extract BCD values
+    // BCD decoding (same as getProductionDate)
     uint8_t day = ((block08 >> 28) & 0x0F) * 10 + ((block08 >> 24) & 0x0F);
     uint8_t month = ((block08 >> 20) & 0x0F) * 10 + ((block08 >> 16) & 0x0F);
-    uint16_t year = ((block08 >> 12) & 0x0F) * 1000 + ((block08 >> 8) & 0x0F) * 100 + 
-                    ((block08 >> 4) & 0x0F) * 10 + (block08 & 0x0F);
+    uint16_t year = ((block08 & 0x0F) * 1000) + 
+                    (((block08 >> 4) & 0x0F) * 100) +
+                    (((block08 >> 12) & 0x0F) * 10) + 
+                    ((block08 >> 8) & 0x0F);
     
     // Get current date
     time_t now = time(nullptr);

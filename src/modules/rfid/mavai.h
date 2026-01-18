@@ -109,6 +109,7 @@ private:
     // MyKey - Block read/write helpers
     uint32_t readBlockAsUint32(uint8_t blockNum);
     void writeBlockAsUint32(uint8_t blockNum, uint32_t value);
+    void writeBlockToMemory(uint8_t blockNum, uint32_t value);
     
 private:
 // PN532 for SRIX - uses IRQ/RST if board has them defined
