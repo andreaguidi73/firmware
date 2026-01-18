@@ -1160,21 +1160,15 @@ void MAVAITool::exportVendor(uint32_t *vendor) {
         return;
     }
     
-    // Read and decode block 0x18
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
-    encodeDecodeBlock(&block18);
-    uint16_t vendorHigh = (block18 >> 16) & 0xFFFF;  // UPPER 16 bits
-    
-    // Read and decode block 0x19
     uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
+    
+    // Decode temporarily
+    encodeDecodeBlock(&block18);
     encodeDecodeBlock(&block19);
-    uint16_t vendorLow = (block19 >> 16) & 0xFFFF;   // UPPER 16 bits
     
-    // Concatenate: vendorHigh (upper 16 bits) + vendorLow (lower 16 bits)
-    uint32_t vendorRaw = ((uint32_t)vendorHigh << 16) | vendorLow;
-    
-    // Add 1 because vendor is stored as (vendor - 1)
-    *vendor = vendorRaw + 1;
+    // Extract LOW 16 bits from each, combine (NO +1 for display!)
+    *vendor = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
 }
 
 // Check if key is in factory reset state
@@ -1464,7 +1458,7 @@ uint16_t MAVAITool::getDaysSinceProduction() {
 }
 
 // Calculate days from 1/1/1995 - simple implementation
-uint16_t MAVAITool::daysDifference(uint8_t day, uint8_t month, uint16_t year) {
+uint32_t MAVAITool::daysDifference(uint8_t day, uint8_t month, uint16_t year) {
     const uint16_t baseYear = 1995;
     
     if (year < baseYear) return 0;
@@ -1489,7 +1483,7 @@ uint16_t MAVAITool::daysDifference(uint8_t day, uint8_t month, uint16_t year) {
     // Add days in current month
     totalDays += day - 1;
     
-    return (uint16_t)totalDays;
+    return totalDays;
 }
 
 // Calculate days since 1/1/1995 using MIKAI algorithm
@@ -1752,12 +1746,11 @@ void MAVAITool::show_mykey_info() {
     
     display_banner();
     
+    // Use smaller font for dense information display
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    tft.setTextSize(FM);
-    padprintln("=== MAVAI Tool v1.0 ===");
     tft.setTextSize(FP);
     
-    // Show UID
+    // Show UID (compact format)
     String uid_str = "UID: ";
     for (uint8_t i = 0; i < 8; i++) {
         if (_uid[i] < 0x10) uid_str += "0";
@@ -1769,8 +1762,7 @@ void MAVAITool::show_mykey_info() {
     
     // Show Key ID
     uint32_t keyID = getKeyID();
-    padprintln("Key ID: " + String(keyID, HEX));
-    padprintln("-----------------------");
+    padprintln("KeyID: " + String(keyID, HEX));
     
     // Calculate encryption key if not already done
     if (!_vendorCalculated) {
@@ -1787,22 +1779,18 @@ void MAVAITool::show_mykey_info() {
     exportVendor(&vendor);
     padprintln("Vendor: " + String(vendor, HEX));
     
-    // Display encryption key
-    padprintln("Enc Key: " + String(_encryptionKey, HEX));
-    padprintln("-----------------------");
+    // Display encryption key (shortened label)
+    padprintln("EncKey: " + String(_encryptionKey, HEX));
     
-    // Production date
+    // Production date (shortened label)
     String prodDate = getProductionDate();
-    padprintln("Production: " + prodDate);
+    padprintln("Prod: " + prodDate);
     
-    // Lock status
+    // Lock status and Reset status (combined on fewer lines)
     bool locked = checkLockID();
-    padprintln("Lock ID: " + String(locked ? "[LOCKED]" : "[OK]"));
-    
-    // Reset status
     bool resetState = isReset();
-    padprintln("Status: " + String(resetState ? "[RESET]" : "[ACTIVE]"));
-    padprintln("");
+    padprintln("Lock: " + String(locked ? "LOCKED" : "OK") + 
+               " | Status: " + String(resetState ? "RESET" : "ACTIVE"));
     
     tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
     padprintln("Press [OK] to continue");
@@ -1824,14 +1812,12 @@ void MAVAITool::view_credit_ui() {
     tft.setTextSize(FM);
     padprintln("Current Credit:");
     tft.setTextSize(FP);
-    padprintln("");
     
     uint16_t credit = getCurrentCredit();
     float creditEuro = credit / 100.0;
     
     padprintln("EUR " + String(creditEuro, 2));
     padprintln("(" + String(credit) + " cents)");
-    padprintln("");
     
     tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
     padprintln("Press [OK] to continue");
@@ -1870,14 +1856,11 @@ void MAVAITool::add_credit_ui() {
     // Add credit
     if (addCents(cents, day, month, year)) {
         displaySuccess("Credit added!");
-        padprintln("");
         float creditEuro = cents / 100.0;
         padprintln("Added: EUR " + String(creditEuro, 2));
-        padprintln("");
         uint16_t newCredit = getCurrentCredit();
         float newCreditEuro = newCredit / 100.0;
         padprintln("New credit: EUR " + String(newCreditEuro, 2));
-        padprintln("");
         tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
         padprintln("Use 'Write to tag' to apply!");
         tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
@@ -1914,10 +1897,8 @@ void MAVAITool::set_credit_ui() {
     
     display_banner();
     padprintln("Set credit to " + String(cents) + " cents?");
-    padprintln("");
     padprintln("This will replace the");
     padprintln("current credit value.");
-    padprintln("");
     
     loopOptions(options);
     
@@ -1938,10 +1919,8 @@ void MAVAITool::set_credit_ui() {
     // Set credit
     if (setCents(cents, day, month, year)) {
         displaySuccess("Credit set!");
-        padprintln("");
         float creditEuro = cents / 100.0;
         padprintln("New credit: EUR " + String(creditEuro, 2));
-        padprintln("");
         tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
         padprintln("Use 'Write to tag' to apply!");
         tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
@@ -1968,11 +1947,8 @@ void MAVAITool::view_vendor_ui() {
     tft.setTextSize(FM);
     padprintln("Current Vendor:");
     tft.setTextSize(FP);
-    padprintln("");
     padprintln("0x" + String(vendor, HEX));
-    padprintln("");
     padprintln("Decimal: " + String(vendor));
-    padprintln("");
     
     tft.setTextColor(getColorVariation(bruceConfig.priColor), bruceConfig.bgColor);
     padprintln("Press [OK] to continue");
@@ -2003,9 +1979,7 @@ void MAVAITool::import_vendor_ui() {
     importVendor(vendor);
     
     displaySuccess("Vendor imported!");
-    padprintln("");
     padprintln("Vendor: 0x" + String(vendor, HEX));
-    padprintln("");
     tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
     padprintln("Use 'Write to tag' to apply!");
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
@@ -2026,9 +2000,7 @@ void MAVAITool::export_vendor_ui() {
     exportVendor(&vendor);
     
     displaySuccess("Vendor exported!");
-    padprintln("");
     padprintln("Vendor: 0x" + String(vendor, HEX));
-    padprintln("");
     padprintln("Use 'Import Vendor' to");
     padprintln("apply to another tag.");
     
@@ -2039,102 +2011,54 @@ void MAVAITool::reset_key_ui() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) {
         displayError("No data in memory!");
         delay(2000);
-        set_state(IDLE_MODE);
         return;
     }
     
     display_banner();
     
-    tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
     padprintln("WARNING: Factory Reset");
     padprintln("======================");
-    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     padprintln("");
     padprintln("This will reset ALL MyKey data:");
     padprintln("");
-    padprintln("  * Vendor code -> Factory default");
-    padprintln("  * Credit -> 0.00 EUR");
-    padprintln("  * Transaction history -> Cleared");
-    padprintln("  * 38 system blocks -> Recalculated");
-    padprintln("  * Counters -> Reset to initial");
+    padprintln("• Vendor code → Factory default");
+    padprintln("• Credit → 0.00€");
+    padprintln("• Transaction history → Cleared");
+    padprintln("• 38 system blocks → Recalculated");
+    padprintln("• Counters → Reset to initial values");
     padprintln("");
-    tft.setTextColor(TFT_GREEN, bruceConfig.bgColor);
-    padprintln("PRESERVED:");
-    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    padprintln("  * UID (hardware, unchangeable)");
-    padprintln("  * Key ID");
-    padprintln("  * Production Date");
+    padprintln("Only UID, KeyID and Production Date");
+    padprintln("will remain unchanged.");
     padprintln("");
     
     options = {};
     bool confirmed = false;
     
     options.emplace_back("CONFIRM Factory Reset", [&confirmed]() { confirmed = true; });
-    options.emplace_back("Cancel", [this]() { set_state(IDLE_MODE); });
+    options.emplace_back("Cancel", []() {});
     
     loopOptions(options);
     
-    if (!confirmed) {
-        set_state(IDLE_MODE);
-        return;
+    if (confirmed) {
+        display_banner();
+        
+        if (resetKey()) {
+            displaySuccess("Factory Reset Complete!");
+            padprintln("");
+            padprintln("• Vendor: Factory default");
+            padprintln("• Credit: 0.00€");
+            padprintln("• Transaction history: Cleared");
+            padprintln("• 38 blocks recalculated");
+            padprintln("");
+            padprintln("Key is now in factory state.");
+        } else {
+            displayError("Reset failed!");
+            padprintln("");
+            padprintln("Data restored to original.");
+        }
+        
+        delayWithReturn(4000);
     }
-    
-    // Second confirmation
-    display_banner();
-    tft.setTextColor(TFT_RED, bruceConfig.bgColor);
-    padprintln("FINAL CONFIRMATION");
-    padprintln("==================");
-    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    padprintln("");
-    padprintln("Are you ABSOLUTELY SURE?");
-    padprintln("");
-    padprintln("This action CANNOT be undone");
-    padprintln("unless you have a backup!");
-    padprintln("");
-    
-    options = {};
-    bool finalConfirm = false;
-    
-    options.emplace_back("YES - Reset to Factory", [&finalConfirm]() { finalConfirm = true; });
-    options.emplace_back("NO - Cancel", [this]() { set_state(IDLE_MODE); });
-    
-    loopOptions(options);
-    
-    if (!finalConfirm) {
-        set_state(IDLE_MODE);
-        return;
-    }
-    
-    // Perform reset
-    display_banner();
-    padprintln("Performing Factory Reset...");
-    padprintln("");
-    padprintln("Please wait...");
-    
-    if (resetKey()) {
-        padprintln("");
-        displaySuccess("Factory Reset Complete!");
-        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-        padprintln("");
-        padprintln("• Vendor: Factory default");
-        padprintln("• Credit: 0.00€");
-        padprintln("• Transaction history: Cleared");
-        padprintln("• 38 blocks recalculated");
-        padprintln("");
-        padprintln("Key is now in factory state.");
-        padprintln("");
-        tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
-        padprintln("Use 'Write to tag' to apply!");
-        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-    } else {
-        displayError("Reset FAILED!");
-        padprintln("");
-        padprintln("Data has been restored.");
-        padprintln("No changes were made.");
-    }
-    
-    delayWithReturn(5000);
-    set_state(IDLE_MODE);
 }
 
 // Entry point

@@ -97,7 +97,7 @@ private:
     uint16_t getDaysSinceProduction();
     
     // MyKey - Utility functions
-    uint16_t daysDifference(uint8_t day, uint8_t month, uint16_t year);
+    uint32_t daysDifference(uint8_t day, uint8_t month, uint16_t year);
     uint32_t daysSince1995(uint8_t day, uint8_t month, uint16_t year);
     uint32_t getDaysElapsed();
     bool resetKey();
