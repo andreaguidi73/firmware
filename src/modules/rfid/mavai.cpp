@@ -847,10 +847,10 @@ void MAVAITool::writeBlockAsUint32(uint8_t blockNum, uint32_t value) {
     if (blockNum >= SRIX4K_BLOCKS) return;
     uint8_t *ptr = &_dump[blockNum * SRIX_BLOCK_LENGTH];
     // Write as BIG-ENDIAN: ptr[0] = MSB
-    ptr[0] = (value >> 24) & 0xFF;
-    ptr[1] = (value >> 16) & 0xFF;
-    ptr[2] = (value >> 8) & 0xFF;
-    ptr[3] = value & 0xFF;
+    ptr[0] = (uint8_t)((value >> 24) & 0xFF);
+    ptr[1] = (uint8_t)((value >> 16) & 0xFF);
+    ptr[2] = (uint8_t)((value >> 8) & 0xFF);
+    ptr[3] = (uint8_t)(value & 0xFF);
 }
 
 // Helper: Write uint32_t to memory (alias for consistency with problem statement)
