@@ -1144,9 +1144,8 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     
     // Backup current state in case of failure
     uint32_t backup21 = readBlockAsUint32(0x21);
-    const int TX_BLOCK_COUNT = MYKEY_BLOCK_TRANS_PTR - MYKEY_BLOCK_TRANS_START + 1;  // 9 blocks
-    uint32_t backupTx[TX_BLOCK_COUNT];
-    for (int i = 0; i < TX_BLOCK_COUNT; i++) {
+    uint32_t backupTx[MYKEY_TRANS_TOTAL_BLOCKS];
+    for (int i = 0; i < MYKEY_TRANS_TOTAL_BLOCKS; i++) {
         backupTx[i] = readBlockAsUint32(MYKEY_BLOCK_TRANS_START + i);
     }
     
@@ -1168,7 +1167,7 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     if (!addCents(cents, day, month, year)) {
         // Restore backup on failure
         writeBlockToMemory(0x21, backup21);
-        for (int i = 0; i < TX_BLOCK_COUNT; i++) {
+        for (int i = 0; i < MYKEY_TRANS_TOTAL_BLOCKS; i++) {
             writeBlockToMemory(MYKEY_BLOCK_TRANS_START + i, backupTx[i]);
         }
         return false;
@@ -1185,7 +1184,7 @@ bool MAVAITool::checkLockID() {
     return (block05 & 0x000000FF) == 0x7F;
 }
 
-// Check if key has lock ID protection (alias for compatibility)
+// Check if key has lock ID protection (compatibility alias)
 bool MAVAITool::isLocked() {
     return checkLockID();
 }
