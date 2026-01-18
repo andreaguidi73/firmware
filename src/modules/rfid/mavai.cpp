@@ -1142,6 +1142,9 @@ bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
 bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t year) {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
+    // Safety check: ensure constant is valid
+    static_assert(MYKEY_TRANS_TOTAL_BLOCKS == 9, "Transaction block count must be 9 (0x34-0x3C)");
+    
     // Backup current state in case of failure
     uint32_t backup21 = readBlockAsUint32(0x21);
     uint32_t backupTx[MYKEY_TRANS_TOTAL_BLOCKS];
