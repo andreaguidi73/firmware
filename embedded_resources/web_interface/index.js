@@ -1693,7 +1693,8 @@ function parseMavaiFileContent(content) {
         else if (trimmed.startsWith('ProductionDate:')) result.prodDate = trimmed.substring(15).trim();
         else if (trimmed.startsWith('LockID:') && !trimmed.includes('_Raw')) result.lockId = trimmed.substring(7).trim();
         else if (trimmed.startsWith('Bound:')) result.bound = trimmed.substring(6).trim();
-        else if (trimmed.startsWith('CountdownCounter:') && !trimmed.includes('_Hex')) result.counter = trimmed.substring(17).trim();
+        else if (trimmed.startsWith('DaysElapsed:') && !trimmed.includes('_Source') && !trimmed.includes('_Block')) result.counter = trimmed.substring(12).trim();
+        else if (trimmed.startsWith('CountdownCounter:') && !trimmed.includes('_Hex')) result.counter = trimmed.substring(17).trim();  // Backward compatibility
         else if (trimmed.startsWith('EncryptionKey:')) result.encKey = trimmed.substring(14).trim();
         else if (trimmed.startsWith('OTP_TwosComplement:')) result.otp = trimmed.substring(19).trim();
         else if (trimmed.startsWith('Vendor_Combined:')) result.vendor = trimmed.substring(16).trim();
@@ -1778,7 +1779,7 @@ function generateMavaiFileContent(parsed) {
     content += '# === STATUS ===\n';
     content += 'LockID: ' + (parsed.lockId || 'UNKNOWN') + '\n';
     content += 'Bound: ' + (parsed.bound || 'UNKNOWN') + '\n';
-    content += 'CountdownCounter: ' + (parsed.counter || '0') + '\n';
+    content += 'DaysElapsed: ' + (parsed.counter || '0') + '\n';
     
     content += '# === ENCRYPTION KEY ===\n';
     content += 'EncryptionKey: ' + (parsed.encKey || 'UNKNOWN') + '\n';
