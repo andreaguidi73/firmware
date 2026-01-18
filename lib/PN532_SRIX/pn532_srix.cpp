@@ -244,14 +244,21 @@ bool Arduino_PN532_SRIX::SRIX_write_block(uint8_t address, uint8_t *block) {
 
     if (!sendCommandCheckAck(_packetbuffer, 7)) return false;
 
-    // Wait for PN532 to be ready (SRIX4K write takes ~5ms)
-    if (!waitReady(100)) return false;
+    // Wait for SRIX4K programming time (~5ms)
+    delay(10);
+    
+    // Read and discard PN532 response (SRIX write has no tag response)
+    if (waitReady(100)) {
+        readData(_packetbuffer, 10);
+    }
 
-    // Read response to verify write success (10 bytes: status + 1 byte from tag)
-    readData(_packetbuffer, 10);
+    // Verify write by reading back the block
+    uint8_t verify[4];
+    if (!SRIX_read_block(address, verify)) return false;
 
-    // Check status byte: 0x00 = success
-    return (_packetbuffer[7] == 0x00);
+    // Compare written data with read data
+    return (verify[0] == block[0] && verify[1] == block[1] && 
+            verify[2] == block[2] && verify[3] == block[3]);
 }
 
 bool Arduino_PN532_SRIX::SRIX_get_uid(uint8_t *buffer) {
