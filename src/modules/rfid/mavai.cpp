@@ -18,6 +18,7 @@ MAVAITool::MAVAITool() {
     current_state = IDLE_MODE;
     _dump_valid_from_read = false;
     _dump_valid_from_load = false;
+    _dump_modified = false;
     _tag_read = false;
     _encryptionKey = 0;
     _currentVendor = 0;
@@ -130,7 +131,10 @@ void MAVAITool::select_state() {
     options.emplace_back("Read UID", [this]() { set_state(READ_UID_MODE); });
     options.emplace_back("Load Dump", [this]() { set_state(LOAD_MODE); });
     
-    if (_dump_valid_from_load) {
+    // Show "Write to tag" option if:
+    // - Dump was loaded from file (_dump_valid_from_load), OR
+    // - Data was read from tag AND modified (_dump_valid_from_read && _dump_modified)
+    if (_dump_valid_from_load || (_dump_valid_from_read && _dump_modified)) {
         options.emplace_back(" -Write to tag", [this]() { set_state(WRITE_TAG_MODE); });
     }
     
@@ -315,6 +319,7 @@ void MAVAITool::read_tag() {
 
     _dump_valid_from_read = true;
     _dump_valid_from_load = false;
+    _dump_modified = false; // Reset modified flag when reading a new tag
     _vendorCalculated = false; // Reset vendor calculation flag
     
     padprintln("");
@@ -393,6 +398,7 @@ void MAVAITool::write_tag() {
     // Final report
     if (blocks_failed == 0) {
         displaySuccess("Write complete!", true);
+        _dump_modified = false; // Reset modified flag after successful write
     } else if (blocks_written > 0) {
         displayWarning("Partial write!", true);
         padprintln("");
@@ -902,6 +908,7 @@ void MAVAITool::load_file_data(FS *fs, String filepath) {
 
     _dump_valid_from_load = true;
     _dump_valid_from_read = false;
+    _dump_modified = false; // Reset modified flag when loading a dump file
 
     displaySuccess("Dump loaded successfully!");
     delay(1000);
@@ -1132,6 +1139,8 @@ void MAVAITool::importVendor(uint32_t vendor) {
     calculateBlockChecksum(&block1D, 0x1D);
     encodeDecodeBlock(&block1D);
     writeBlockToMemory(0x1D, block1D);
+    
+    _dump_modified = true; // Mark dump as modified
 }
 
 // Export vendor code
@@ -1302,6 +1311,8 @@ bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     ptrBlock ^= (keyID & 0x00FFFFFF);
     writeBlockToMemory(MYKEY_BLOCK_TRANS_PTR, ptrBlock);
     
+    _dump_modified = true; // Mark dump as modified
+    
     return true;
 }
 
@@ -1343,7 +1354,10 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
         return false;
     }
     
+    // Note: _dump_modified is already set by addCents()
+    
     return true;
+}
 }
 
 // Check Lock ID protection (block 0x05)
@@ -1697,6 +1711,7 @@ bool MAVAITool::resetKey() {
     // Reset internal state
     _currentVendor = 0;
     _vendorCalculated = false;
+    _dump_modified = true; // Mark dump as modified
     
     Serial.printf("DEBUG resetKey: Reset complete. %d days since 1/1/1995 (BCD: 0x%04X)\n", 
                   elapsedDays, elapsedBCD);
@@ -1848,6 +1863,10 @@ void MAVAITool::add_credit_ui() {
         uint16_t newCredit = getCurrentCredit();
         float newCreditEuro = newCredit / 100.0;
         padprintln("New credit: EUR " + String(newCreditEuro, 2));
+        padprintln("");
+        tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
+        padprintln("Use 'Write to tag' to apply!");
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     } else {
         displayError("Failed to add credit!");
     }
@@ -1908,6 +1927,10 @@ void MAVAITool::set_credit_ui() {
         padprintln("");
         float creditEuro = cents / 100.0;
         padprintln("New credit: EUR " + String(creditEuro, 2));
+        padprintln("");
+        tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
+        padprintln("Use 'Write to tag' to apply!");
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     } else {
         displayError("Failed to set credit!");
     }
@@ -1968,6 +1991,10 @@ void MAVAITool::import_vendor_ui() {
     displaySuccess("Vendor imported!");
     padprintln("");
     padprintln("Vendor: 0x" + String(vendor, HEX));
+    padprintln("");
+    tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
+    padprintln("Use 'Write to tag' to apply!");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     
     delayWithReturn(3000);
 }
@@ -2075,16 +2102,16 @@ void MAVAITool::reset_key_ui() {
         displaySuccess("Factory Reset Complete!");
         tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
         padprintln("");
-        padprintln("Reset results:");
-        padprintln("  * Vendor: Factory default (FEDC0123)");
-        padprintln("  * Credit: 0.00 EUR");
-        padprintln("  * Transaction history: Cleared");
-        padprintln("  * 38 blocks: Recalculated");
+        padprintln("• Vendor: Factory default");
+        padprintln("• Credit: 0.00€");
+        padprintln("• Transaction history: Cleared");
+        padprintln("• 38 blocks recalculated");
+        padprintln("");
+        padprintln("Key is now in factory state.");
         padprintln("");
         tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
-        padprintln("Remember to WRITE to tag!");
+        padprintln("Use 'Write to tag' to apply!");
         tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-        padprintln("Use 'Clone Tag' to apply changes.");
     } else {
         displayError("Reset FAILED!");
         padprintln("");
