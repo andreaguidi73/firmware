@@ -572,14 +572,15 @@ void MAVAITool::save_file() {
     // Calculate all values
     calculateEncryptionKey();
     
-    // Get raw block values for debug
+    // Get raw block values
+    uint32_t block5 = readBlockAsUint32(0x05);
     uint32_t block6 = readBlockAsUint32(MYKEY_BLOCK_OTP);
     uint32_t block18_raw = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
     uint32_t block19_raw = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
     uint32_t block21_raw = readBlockAsUint32(MYKEY_BLOCK_CREDIT1);
     uint32_t block23_raw = readBlockAsUint32(MYKEY_BLOCK_PREVCREDIT1);
     
-    // Decode vendor blocks for display
+    // Decode vendor blocks
     uint32_t b18_dec = block18_raw;
     uint32_t b19_dec = block19_raw;
     encodeDecodeBlock(&b18_dec);
@@ -593,18 +594,34 @@ void MAVAITool::save_file() {
     uint32_t keyID = getKeyID();
     String prodDate = getProductionDate();
     
-    // Calculate OTP values for debug using helper functions
+    // Calculate OTP values
     uint32_t otpSwapped = byteSwap32(block6);
     uint32_t otp = calculateOTP(block6);
     
-    // Write enhanced header
+    // Lock ID and Bound status
+    bool lockIdSet = (block5 & 0x000000FF) == 0x7F;
+    bool isBound = !isReset();
+    
+    // Countdown counter (blocks 0x05 and 0x06 contain counter info)
+    // Block 0x05: bits 8-31 contain part of counter
+    // Block 0x06: OTP/counter area
+    uint32_t countdownCounter = block5 >> 8;  // Upper 24 bits of block 5
+    
+    // Write enhanced header v1.2
     file.println("Filetype: Bruce MAVAI Dump");
-    file.println("Version: 1.1");
+    file.println("Version: 1.2");
     
     file.println("# === IDENTIFICATION ===");
     file.println("UID: " + uid_str);
     file.println("KeyID: " + String(keyID, HEX));
     file.println("ProductionDate: " + prodDate);
+    
+    file.println("# === STATUS ===");
+    file.println("LockID: " + String(lockIdSet ? "LOCKED" : "OK"));
+    file.println("LockID_Raw: " + String(block5 & 0xFF, HEX));
+    file.println("Bound: " + String(isBound ? "YES" : "NO"));
+    file.println("CountdownCounter: " + String(countdownCounter));
+    file.println("CountdownCounter_Hex: " + String(countdownCounter, HEX));
     
     file.println("# === OTP CALCULATION ===");
     file.println("OTP_Block6_Raw: " + String(block6, HEX));

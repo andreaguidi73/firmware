@@ -358,7 +358,7 @@
     </div>
     <div class="dialog mavai hidden">
       <div class="dialog-head">
-        <span>MAVAI Tool v1.0</span>
+        <span>MAVAI Tool v1.2</span>
         <div>
           <button id="mavai-refresh" class="btn-action" onclick="mavaiLoadDumpList()" title="Refresh">↻</button>
         </div>
@@ -376,14 +376,57 @@
           </div>
         </div>
         
-        <!-- Card Info -->
-        <div class="mavai-section" id="mavai-info-section" style="display:none;">
-          <div class="mavai-section-title">🎴 Card Info</div>
+        <!-- Card Identification -->
+        <div class="mavai-section" id="mavai-id-section" style="display:none;">
+          <div class="mavai-section-title">🎴 Card Identification</div>
           <div class="mavai-info-grid">
-            <div class="mavai-info-row"><span class="label">UID:</span><span id="mavai-uid">-</span></div>
-            <div class="mavai-info-row"><span class="label">Key ID:</span><span id="mavai-keyid">-</span></div>
-            <div class="mavai-info-row"><span class="label">Enc Key:</span><span id="mavai-enckey">-</span></div>
+            <div class="mavai-info-row"><span class="label">UID:</span><span id="mavai-uid" class="mono">-</span></div>
+            <div class="mavai-info-row"><span class="label">Key ID:</span><span id="mavai-keyid" class="mono">-</span></div>
             <div class="mavai-info-row"><span class="label">Prod Date:</span><span id="mavai-proddate">-</span></div>
+          </div>
+        </div>
+        
+        <!-- Status Section (NEW) -->
+        <div class="mavai-section" id="mavai-status-section" style="display:none;">
+          <div class="mavai-section-title">🔒 Status</div>
+          <div class="mavai-info-grid">
+            <div class="mavai-info-row">
+              <span class="label">Lock ID:</span>
+              <span id="mavai-lockid" class="status-badge">-</span>
+            </div>
+            <div class="mavai-info-row">
+              <span class="label">Bound:</span>
+              <span id="mavai-bound" class="status-badge">-</span>
+            </div>
+            <div class="mavai-info-row">
+              <span class="label">Counter:</span>
+              <span id="mavai-counter" class="mono">-</span>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Encryption Info -->
+        <div class="mavai-section" id="mavai-crypto-section" style="display:none;">
+          <div class="mavai-section-title">🔐 Encryption</div>
+          <div class="mavai-info-grid">
+            <div class="mavai-info-row"><span class="label">Enc Key:</span><span id="mavai-enckey" class="mono">-</span></div>
+            <div class="mavai-info-row"><span class="label">OTP:</span><span id="mavai-otp" class="mono">-</span></div>
+            <div class="mavai-info-row"><span class="label">Vendor:</span><span id="mavai-vendor-display" class="mono">-</span></div>
+          </div>
+        </div>
+        
+        <!-- Credit Section -->
+        <div class="mavai-section" id="mavai-credit-section" style="display:none;">
+          <div class="mavai-section-title">💰 Credit</div>
+          <div class="mavai-info-grid">
+            <div class="mavai-info-row">
+              <span class="label">Current:</span>
+              <span id="mavai-credit-display" class="credit-value">€0.00</span>
+            </div>
+            <div class="mavai-info-row">
+              <span class="label">Previous:</span>
+              <span id="mavai-prevcredit-display" class="credit-value-prev">€0.00</span>
+            </div>
           </div>
         </div>
         
@@ -392,12 +435,12 @@
           <div class="mavai-section-title">✏️ Edit Values</div>
           <div class="mavai-edit-row">
             <label>Credit (cents):</label>
-            <input type="number" id="mavai-credit-input" min="0" placeholder="e.g. 500">
-            <span id="mavai-credit-preview">€0.00</span>
+            <input type="number" id="mavai-credit-input" min="0" max="65535" placeholder="e.g. 500" oninput="mavaiUpdateCreditPreview()">
+            <span id="mavai-credit-preview" class="preview">€0.00</span>
           </div>
           <div class="mavai-edit-row">
             <label>Vendor (hex):</label>
-            <input type="text" id="mavai-vendor-input" maxlength="8" placeholder="e.g. 12345678">
+            <input type="text" id="mavai-vendor-input" maxlength="8" placeholder="e.g. 12345678" pattern="[0-9A-Fa-f]{1,8}">
           </div>
         </div>
         
@@ -414,6 +457,7 @@
         <div class="mavai-section" id="mavai-actions-section" style="display:none;">
           <button class="btn-action" onclick="mavaiSaveDump()">💾 Save to Device</button>
           <button class="btn-action" onclick="mavaiDownloadDump()">⬇️ Download to PC</button>
+          <button class="btn-action" onclick="mavaiUploadDumpDialog()">⬆️ Upload from PC</button>
         </div>
         
         <!-- Workflow Info -->
@@ -421,13 +465,15 @@
           <div class="mavai-section-title">ℹ️ Workflow</div>
           <ol>
             <li><b>On Device:</b> MAVAI Tool → Read Tag → Save Dump</li>
-            <li><b>Here:</b> Select dump → Edit credit/vendor → Save</li>
+            <li><b>Here:</b> Select dump → View/Edit → Save</li>
             <li><b>On Device:</b> MAVAI Tool → Load Dump → Write to Tag</li>
           </ol>
         </div>
         
-        <!-- Status -->
-        <div class="mavai-status" id="mavai-status">Ready</div>
+        <!-- Status Bar -->
+        <div class="mavai-status-bar" id="mavai-status-bar">
+          <span class="status-text">Ready</span>
+        </div>
       </div>
       <div class="dialog-footer">
         <button class="btn-action act-dialog-close act-escape">Close</button>
