@@ -680,7 +680,7 @@ void MAVAITool::save_file() {
     
     file.println("# === IDENTIFICATION ===");
     file.println("UID: " + uid_str);
-    file.println("KeyID: " + String(keyID, HEX));
+    file.println("KeyID: " + toHex32(keyID));
     file.println("ProductionDate: " + prodDate);
     
     file.println("# === STATUS ===");
@@ -692,35 +692,35 @@ void MAVAITool::save_file() {
     if (countdownValid) {
         file.println("DaysElapsed: " + String(countdownCounter));
         file.println("DaysElapsed_Source: Block " + countdownSource);
-        file.println("DaysElapsed_Block10_Raw: " + String(block10, HEX));
-        file.println("DaysElapsed_Block14_Raw: " + String(block14, HEX));
+        file.println("DaysElapsed_Block10_Raw: " + toHex32(block10));
+        file.println("DaysElapsed_Block14_Raw: " + toHex32(block14));
     } else {
         file.println("DaysElapsed: INVALID");
-        file.println("DaysElapsed_Block10_Raw: " + String(block10, HEX));
-        file.println("DaysElapsed_Block14_Raw: " + String(block14, HEX));
+        file.println("DaysElapsed_Block10_Raw: " + toHex32(block10));
+        file.println("DaysElapsed_Block14_Raw: " + toHex32(block14));
     }
     
     file.println("# === OTP CALCULATION ===");
-    file.println("OTP_Block6_Raw: " + String(block6, HEX));
-    file.println("OTP_ByteSwapped: " + String(otpSwapped, HEX));
-    file.println("OTP_TwosComplement: " + String(otp, HEX));
+    file.println("OTP_Block6_Raw: " + toHex32(block6));
+    file.println("OTP_ByteSwapped: " + toHex32(otpSwapped));
+    file.println("OTP_TwosComplement: " + toHex32(otp));
     
     file.println("# === VENDOR CALCULATION ===");
-    file.println("Vendor_Block18_Raw: " + String(block18_raw, HEX));
-    file.println("Vendor_Block18_Decoded: " + String(b18_dec, HEX));
-    file.println("Vendor_Block19_Raw: " + String(block19_raw, HEX));
-    file.println("Vendor_Block19_Decoded: " + String(b19_dec, HEX));
-    file.println("Vendor_Combined: " + String(vendor, HEX));
-    file.println("Vendor_ForEncryption: " + String(vendor + 1, HEX));
+    file.println("Vendor_Block18_Raw: " + toHex32(block18_raw));
+    file.println("Vendor_Block18_Decoded: " + toHex32(b18_dec));
+    file.println("Vendor_Block19_Raw: " + toHex32(block19_raw));
+    file.println("Vendor_Block19_Decoded: " + toHex32(b19_dec));
+    file.println("Vendor_Combined: " + toHex32(vendor));
+    file.println("Vendor_ForEncryption: " + toHex32(vendor + 1));
     
     file.println("# === ENCRYPTION KEY ===");
-    file.println("EncryptionKey: " + String(_encryptionKey, HEX));
+    file.println("EncryptionKey: " + toHex32(_encryptionKey));
     
     file.println("# === CREDIT ===");
-    file.println("Credit_Block21_Raw: " + String(block21_raw, HEX));
+    file.println("Credit_Block21_Raw: " + toHex32(block21_raw));
     file.println("Credit_Cents: " + String(credit));
     file.println("Credit_EUR: " + String(credit / 100.0, 2));
-    file.println("PrevCredit_Block23_Raw: " + String(block23_raw, HEX));
+    file.println("PrevCredit_Block23_Raw: " + toHex32(block23_raw));
     file.println("PrevCredit_Cents: " + String(prevCredit));
     file.println("PrevCredit_EUR: " + String(prevCredit / 100.0, 2));
     
@@ -1015,6 +1015,13 @@ uint32_t MAVAITool::calculateOTP(uint32_t otpBlock) {
     uint32_t otpSwapped = byteSwap32(otpBlock);
     // Two's complement (NOT + 1)
     return ~otpSwapped + 1;
+}
+
+// Helper: Format uint32_t as 8-character uppercase hex string with leading zeros
+String MAVAITool::toHex32(uint32_t value) {
+    char buf[9];
+    snprintf(buf, sizeof(buf), "%08X", value);
+    return String(buf);
 }
 
 // Cryptographic function: XOR-based bit swapping for obfuscation
@@ -1334,6 +1341,7 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     
     // Backup current state in case of failure
     uint32_t backup21 = readBlockAsUint32(0x21);
+    uint32_t backup25 = readBlockAsUint32(0x25);
     uint32_t backupTx[MYKEY_TRANS_TOTAL_BLOCKS];
     for (int i = 0; i < MYKEY_TRANS_TOTAL_BLOCKS; i++) {
         backupTx[i] = readBlockAsUint32(MYKEY_BLOCK_TRANS_START + i);
@@ -1357,6 +1365,7 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     if (!addCents(cents, day, month, year)) {
         // Restore backup on failure
         writeBlockToMemory(0x21, backup21);
+        writeBlockToMemory(0x25, backup25);
         for (int i = 0; i < MYKEY_TRANS_TOTAL_BLOCKS; i++) {
             writeBlockToMemory(MYKEY_BLOCK_TRANS_START + i, backupTx[i]);
         }
