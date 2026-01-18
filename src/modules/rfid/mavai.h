@@ -110,6 +110,7 @@ private:
     uint32_t* getBlockPtr(uint8_t blockNum);
     uint64_t getUidAsUint64();
     uint32_t getUidForEncryption(); // 4-byte UID in little-endian for MyKey
+    uint32_t calculateOTP(uint32_t otpBlock); // Calculate OTP from raw block value
     
     // MyKey - Block read/write helpers
     uint32_t readBlockAsUint32(uint8_t blockNum);

@@ -910,7 +910,7 @@ void MAVAITool::writeBlockToMemory(uint8_t blockNum, uint32_t value) {
 }
 
 // Helper: Calculate OTP from raw block value (byte swap + two's complement)
-uint32_t calculateOTP(uint32_t otpBlock) {
+uint32_t MAVAITool::calculateOTP(uint32_t otpBlock) {
     // Byte swap: reverse byte order
     uint32_t otpSwapped = ((otpBlock & 0x000000FF) << 24) | 
                           ((otpBlock & 0x0000FF00) << 8)  |
@@ -979,8 +979,8 @@ void MAVAITool::calculateEncryptionKey() {
     encodeDecodeBlock(&block19);
     
     // Extract LOW 16 bits from each, combine, ADD 1
-    uint32_t vendor = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
-    vendor += 1;  // CRITICAL: +1 after extraction for encryption key only!
+    uint32_t vendorBase = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
+    uint32_t vendor = vendorBase + 1;  // CRITICAL: +1 after extraction for encryption key only!
     
     // Note: blocks are not re-encoded because we only used temporary copies
     
@@ -998,7 +998,7 @@ void MAVAITool::calculateEncryptionKey() {
                           ((block6 & 0x00FF0000) >> 8)  | 
                           ((block6 & 0xFF000000) >> 24);
     Serial.printf("DEBUG: OTP raw=0x%08X swapped=0x%08X final=0x%08X\n", block6, otpSwapped, otp);
-    Serial.printf("DEBUG: Vendor=0x%08X (+1=0x%08X)\n", vendor-1, vendor);
+    Serial.printf("DEBUG: Vendor=0x%08X (+1=0x%08X)\n", vendorBase, vendor);
     Serial.printf("DEBUG: UID=0x%016llX\n", uid);
     Serial.printf("DEBUG: EncryptionKey=0x%08X\n", _encryptionKey);
 }
@@ -1100,13 +1100,17 @@ uint16_t MAVAITool::getCurrentCredit() {
 }
 
 // Get previous credit from block 0x23
+// Note: Previous credit uses a different storage format than current credit:
+// - Block 0x23 (PREVCREDIT1) stores the value with only encoding, NO XOR encryption
+// - This allows the system to track the last credit value before the most recent transaction
+// - Current credit (block 0x21) uses XOR with encryption key + encoding
 uint16_t MAVAITool::getPreviousCredit() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
     if (!_vendorCalculated) calculateEncryptionKey();
     
     uint32_t prevCreditBlock = readBlockAsUint32(MYKEY_BLOCK_PREVCREDIT1);  // 0x23
-    encodeDecodeBlock(&prevCreditBlock);    // Decode only, no XOR needed for previous credit
+    encodeDecodeBlock(&prevCreditBlock);    // Decode only - no XOR needed for previous credit
     return (uint16_t)(prevCreditBlock & 0xFFFF);  // Return LOW 16 bits only
 }
 
