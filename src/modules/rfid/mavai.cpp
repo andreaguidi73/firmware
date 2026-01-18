@@ -1067,7 +1067,7 @@ void MAVAITool::calculateEncryptionKey() {
     uint32_t block6 = readBlockAsUint32(MYKEY_BLOCK_OTP);  // 0x06
     uint32_t otp = calculateOTP(block6);
     
-    // 2. Vendor Extraction - DECODE FIRST, EXTRACT UPPER 16 BITS, +1
+    // 2. Vendor Extraction - DECODE FIRST, EXTRACT LOWER 16 BITS, +1
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);  // 0x18
     uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);  // 0x19
     
@@ -1075,8 +1075,8 @@ void MAVAITool::calculateEncryptionKey() {
     encodeDecodeBlock(&block18);
     encodeDecodeBlock(&block19);
     
-    // Extract UPPER 16 bits from each, combine, ADD 1 for encryption
-    uint32_t vendorBase = (((block18 >> 16) & 0xFFFF) << 16) | ((block19 >> 16) & 0xFFFF);
+    // Extract LOWER 16 bits from each, combine, ADD 1 for encryption
+    uint32_t vendorBase = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
     uint32_t vendor = vendorBase + 1;  // CRITICAL: +1 after extraction for encryption key only!
     
     // Note: blocks are not re-encoded because we only used temporary copies
@@ -1115,14 +1115,14 @@ void MAVAITool::importVendor(uint32_t vendor) {
     uint16_t vendorHigh = (vendorMinusOne >> 16) & 0xFFFF;
     uint16_t vendorLow = vendorMinusOne & 0xFFFF;
     
-    // 2. Prepare block 0x18: vendor high in UPPER 16 bits (bits 31-16)
-    uint32_t block18 = ((uint32_t)vendorHigh << 16);
+    // 2. Prepare block 0x18: vendor high in LOWER 16 bits (bits 15-0)
+    uint32_t block18 = (uint32_t)vendorHigh;
     calculateBlockChecksum(&block18, 0x18);
     encodeDecodeBlock(&block18);
     writeBlockToMemory(0x18, block18);
     
-    // 3. Prepare block 0x19: vendor low in UPPER 16 bits (bits 31-16)
-    uint32_t block19 = ((uint32_t)vendorLow << 16);
+    // 3. Prepare block 0x19: vendor low in LOWER 16 bits (bits 15-0)
+    uint32_t block19 = (uint32_t)vendorLow;
     calculateBlockChecksum(&block19, 0x19);
     encodeDecodeBlock(&block19);
     writeBlockToMemory(0x19, block19);
@@ -1138,12 +1138,12 @@ void MAVAITool::importVendor(uint32_t vendor) {
     writeBlockToMemory(0x25, credit25);
     
     // 6. Prepare backup blocks with CORRECT block numbers for checksum
-    uint32_t block1C = ((uint32_t)vendorHigh << 16);
+    uint32_t block1C = (uint32_t)vendorHigh;
     calculateBlockChecksum(&block1C, 0x1C);  // Block 0x1C checksum (not 0x18!)
     encodeDecodeBlock(&block1C);
     writeBlockToMemory(0x1C, block1C);
     
-    uint32_t block1D = ((uint32_t)vendorLow << 16);
+    uint32_t block1D = (uint32_t)vendorLow;
     calculateBlockChecksum(&block1D, 0x1D);  // Block 0x1D checksum (not 0x19!)
     encodeDecodeBlock(&block1D);
     writeBlockToMemory(0x1D, block1D);
