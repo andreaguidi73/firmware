@@ -2011,6 +2011,7 @@ void MAVAITool::reset_key_ui() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) {
         displayError("No data in memory!");
         delay(2000);
+        set_state(IDLE_MODE);
         return;
     }
     
@@ -2035,7 +2036,7 @@ void MAVAITool::reset_key_ui() {
     bool confirmed = false;
     
     options.emplace_back("CONFIRM Factory Reset", [&confirmed]() { confirmed = true; });
-    options.emplace_back("Cancel", []() {});
+    options.emplace_back("Cancel", [this]() { set_state(IDLE_MODE); });
     
     loopOptions(options);
     
@@ -2059,6 +2060,8 @@ void MAVAITool::reset_key_ui() {
         
         delayWithReturn(4000);
     }
+    
+    set_state(IDLE_MODE);
 }
 
 // Entry point
