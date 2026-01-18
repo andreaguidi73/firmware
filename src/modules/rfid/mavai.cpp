@@ -1094,7 +1094,7 @@ bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
                           actualCredit;
         writeBlockToMemory(0x34 + current, txBlock);
         
-    } while (cents > 5);
+    } while (cents > 0);
     
     // ========== SAVE FINAL CREDIT TO 0x21 AND 0x25 ==========
     uint32_t creditBlock = actualCredit;
