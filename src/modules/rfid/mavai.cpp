@@ -512,7 +512,7 @@ void MAVAITool::save_file() {
 
     // Build UID string with CORRECT order (D002... first)
     String uid_str = "";
-    for (int8_t i = 7; i >= 0; i--) {
+    for (int i = 7; i >= 0; i--) {
         if (_uid[i] < 0x10) uid_str += "0";
         uid_str += String(_uid[i], HEX);
     }
@@ -593,10 +593,12 @@ void MAVAITool::save_file() {
     uint32_t keyID = getKeyID();
     String prodDate = getProductionDate();
     
-    // Calculate OTP values for debug
-    uint32_t otpSwapped = ((block6 & 0xFF) << 24) | ((block6 & 0xFF00) << 8) |
-                          ((block6 & 0xFF0000) >> 8) | ((block6 >> 24) & 0xFF);
-    uint32_t otp = ~otpSwapped + 1;
+    // Calculate OTP values for debug using helper function
+    uint32_t otp = calculateOTP(block6);
+    uint32_t otpSwapped = ((block6 & 0x000000FF) << 24) | 
+                          ((block6 & 0x0000FF00) << 8)  |
+                          ((block6 & 0x00FF0000) >> 8)  | 
+                          ((block6 & 0xFF000000) >> 24);
     
     // Write enhanced header
     file.println("Filetype: Bruce MAVAI Dump");
@@ -907,6 +909,17 @@ void MAVAITool::writeBlockToMemory(uint8_t blockNum, uint32_t value) {
     writeBlockAsUint32(blockNum, value);
 }
 
+// Helper: Calculate OTP from raw block value (byte swap + two's complement)
+uint32_t calculateOTP(uint32_t otpBlock) {
+    // Byte swap: reverse byte order
+    uint32_t otpSwapped = ((otpBlock & 0x000000FF) << 24) | 
+                          ((otpBlock & 0x0000FF00) << 8)  |
+                          ((otpBlock & 0x00FF0000) >> 8)  | 
+                          ((otpBlock & 0xFF000000) >> 24);
+    // Two's complement (NOT + 1)
+    return ~otpSwapped + 1;
+}
+
 // Cryptographic function: XOR-based bit swapping for obfuscation
 void MAVAITool::encodeDecodeBlock(uint32_t *block) {
     if (!block) return;
@@ -955,12 +968,7 @@ void MAVAITool::calculateEncryptionKey() {
     
     // 1. OTP Calculation - BYTE SWAP + TWO'S COMPLEMENT
     uint32_t block6 = readBlockAsUint32(MYKEY_BLOCK_OTP);  // 0x06
-    // Byte swap: reverse byte order
-    uint32_t otpSwapped = ((block6 & 0x000000FF) << 24) | 
-                          ((block6 & 0x0000FF00) << 8)  |
-                          ((block6 & 0x00FF0000) >> 8)  | 
-                          ((block6 & 0xFF000000) >> 24);
-    uint32_t otp = ~otpSwapped + 1;  // Two's complement (NOT + 1)
+    uint32_t otp = calculateOTP(block6);
     
     // 2. Vendor Extraction - DECODE FIRST, EXTRACT LOW 16 BITS, +1
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);  // 0x18
@@ -985,6 +993,10 @@ void MAVAITool::calculateEncryptionKey() {
     _vendorCalculated = true;
     
     // Debug output
+    uint32_t otpSwapped = ((block6 & 0x000000FF) << 24) | 
+                          ((block6 & 0x0000FF00) << 8)  |
+                          ((block6 & 0x00FF0000) >> 8)  | 
+                          ((block6 & 0xFF000000) >> 24);
     Serial.printf("DEBUG: OTP raw=0x%08X swapped=0x%08X final=0x%08X\n", block6, otpSwapped, otp);
     Serial.printf("DEBUG: Vendor=0x%08X (+1=0x%08X)\n", vendor-1, vendor);
     Serial.printf("DEBUG: UID=0x%016llX\n", uid);
@@ -1093,7 +1105,7 @@ uint16_t MAVAITool::getPreviousCredit() {
     
     if (!_vendorCalculated) calculateEncryptionKey();
     
-    uint32_t prevCreditBlock = readBlockAsUint32(0x23);  // Changed from 0x25 to 0x23
+    uint32_t prevCreditBlock = readBlockAsUint32(MYKEY_BLOCK_PREVCREDIT1);  // 0x23
     encodeDecodeBlock(&prevCreditBlock);    // Decode only, no XOR needed for previous credit
     return (uint16_t)(prevCreditBlock & 0xFFFF);  // Return LOW 16 bits only
 }
