@@ -510,9 +510,9 @@ void MAVAITool::save_file() {
         return;
     }
 
-    // Set UID as default filename
+    // Build UID string with CORRECT order (D002... first)
     String uid_str = "";
-    for (uint8_t i = 0; i < 8; i++) {
+    for (int8_t i = 7; i >= 0; i--) {
         if (_uid[i] < 0x10) uid_str += "0";
         uid_str += String(_uid[i], HEX);
     }
@@ -569,23 +569,69 @@ void MAVAITool::save_file() {
         return;
     }
 
-    // Calculate MyKey data for header
+    // Calculate all values
     calculateEncryptionKey();
+    
+    // Get raw block values for debug
+    uint32_t block6 = readBlockAsUint32(0x06);
+    uint32_t block18_raw = readBlockAsUint32(0x18);
+    uint32_t block19_raw = readBlockAsUint32(0x19);
+    uint32_t block21_raw = readBlockAsUint32(0x21);
+    uint32_t block23_raw = readBlockAsUint32(0x23);
+    
+    // Decode vendor blocks for display
+    uint32_t b18_dec = block18_raw;
+    uint32_t b19_dec = block19_raw;
+    encodeDecodeBlock(&b18_dec);
+    encodeDecodeBlock(&b19_dec);
+    
+    // Get calculated values
     uint32_t vendor = 0;
     exportVendor(&vendor);
     uint16_t credit = getCurrentCredit();
+    uint16_t prevCredit = getPreviousCredit();
     uint32_t keyID = getKeyID();
     String prodDate = getProductionDate();
-
-    // Write header
+    
+    // Calculate OTP values for debug
+    uint32_t otpSwapped = ((block6 & 0xFF) << 24) | ((block6 & 0xFF00) << 8) |
+                          ((block6 & 0xFF0000) >> 8) | ((block6 >> 24) & 0xFF);
+    uint32_t otp = ~otpSwapped + 1;
+    
+    // Write enhanced header
     file.println("Filetype: Bruce MAVAI Dump");
-    file.println("Version: 1.0");
+    file.println("Version: 1.1");
+    
+    file.println("# === IDENTIFICATION ===");
     file.println("UID: " + uid_str);
     file.println("KeyID: " + String(keyID, HEX));
-    file.println("Vendor: " + String(vendor, HEX));
-    file.println("EncryptionKey: " + String(_encryptionKey, HEX));
-    file.println("Credit: " + String(credit));
     file.println("ProductionDate: " + prodDate);
+    
+    file.println("# === OTP CALCULATION ===");
+    file.println("OTP_Block6_Raw: " + String(block6, HEX));
+    file.println("OTP_ByteSwapped: " + String(otpSwapped, HEX));
+    file.println("OTP_TwosComplement: " + String(otp, HEX));
+    
+    file.println("# === VENDOR CALCULATION ===");
+    file.println("Vendor_Block18_Raw: " + String(block18_raw, HEX));
+    file.println("Vendor_Block18_Decoded: " + String(b18_dec, HEX));
+    file.println("Vendor_Block19_Raw: " + String(block19_raw, HEX));
+    file.println("Vendor_Block19_Decoded: " + String(b19_dec, HEX));
+    file.println("Vendor_Combined: " + String(vendor, HEX));
+    file.println("Vendor_ForEncryption: " + String(vendor + 1, HEX));
+    
+    file.println("# === ENCRYPTION KEY ===");
+    file.println("EncryptionKey: " + String(_encryptionKey, HEX));
+    
+    file.println("# === CREDIT ===");
+    file.println("Credit_Block21_Raw: " + String(block21_raw, HEX));
+    file.println("Credit_Cents: " + String(credit));
+    file.println("Credit_EUR: " + String(credit / 100.0, 2));
+    file.println("PrevCredit_Block23_Raw: " + String(block23_raw, HEX));
+    file.println("PrevCredit_Cents: " + String(prevCredit));
+    file.println("PrevCredit_EUR: " + String(prevCredit / 100.0, 2));
+    
+    file.println("# === DUMP DATA ===");
     file.println("Blocks: 128");
     file.println("# Data:");
 
@@ -818,9 +864,12 @@ uint32_t* MAVAITool::getBlockPtr(uint8_t blockNum) {
 }
 
 // Helper: Get UID as uint64_t (big-endian)
+// UID byte order: _uid[7] _uid[6] ... _uid[1] _uid[0]
+// We need to reverse the order so manufacturer code (at _uid[7] and _uid[6]) comes first
 uint64_t MAVAITool::getUidAsUint64() {
     uint64_t uid = 0;
-    for (int i = 0; i < 8; i++) {
+    // Read in reverse order: start from _uid[7] (MSB) to _uid[0] (LSB)
+    for (int i = 7; i >= 0; i--) {
         uid = (uid << 8) | _uid[i];
     }
     return uid;
@@ -934,6 +983,12 @@ void MAVAITool::calculateEncryptionKey() {
     _encryptionKey = (uint32_t)(uid * vendor * otp);
     
     _vendorCalculated = true;
+    
+    // Debug output
+    Serial.printf("DEBUG: OTP raw=0x%08X swapped=0x%08X final=0x%08X\n", block6, otpSwapped, otp);
+    Serial.printf("DEBUG: Vendor=0x%08X (+1=0x%08X)\n", vendor-1, vendor);
+    Serial.printf("DEBUG: UID=0x%016llX\n", uid);
+    Serial.printf("DEBUG: EncryptionKey=0x%08X\n", _encryptionKey);
 }
 
 // Import vendor code to blocks 0x18, 0x19, 0x1C, 0x1D
@@ -1016,21 +1071,31 @@ uint16_t MAVAITool::getCurrentCredit() {
     if (!_vendorCalculated) calculateEncryptionKey();
     
     uint32_t creditBlock = readBlockAsUint32(MYKEY_BLOCK_CREDIT1);  // 0x21
+    
+    // Debug
+    Serial.printf("DEBUG Credit: raw=0x%08X\n", creditBlock);
+    
     creditBlock ^= _encryptionKey;      // 1. XOR with encryption key
+    Serial.printf("DEBUG Credit: after XOR=0x%08X\n", creditBlock);
+    
     encodeDecodeBlock(&creditBlock);    // 2. Decode
-    return (uint16_t)(creditBlock & 0xFFFF);  // 3. Return LOW 16 bits only
+    Serial.printf("DEBUG Credit: after decode=0x%08X\n", creditBlock);
+    
+    uint16_t credit = (uint16_t)(creditBlock & 0xFFFF);  // 3. Return LOW 16 bits only
+    Serial.printf("DEBUG Credit: final=%d (0x%04X)\n", credit, credit);
+    
+    return credit;
 }
 
-// Get previous credit from block 0x25
+// Get previous credit from block 0x23
 uint16_t MAVAITool::getPreviousCredit() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return 0;
     
     if (!_vendorCalculated) calculateEncryptionKey();
     
-    uint32_t creditBlock = readBlockAsUint32(MYKEY_BLOCK_CREDIT2);  // 0x25
-    creditBlock ^= _encryptionKey;      // 1. XOR with encryption key
-    encodeDecodeBlock(&creditBlock);    // 2. Decode
-    return (uint16_t)(creditBlock & 0xFFFF);  // 3. Return LOW 16 bits only
+    uint32_t prevCreditBlock = readBlockAsUint32(0x23);  // Changed from 0x25 to 0x23
+    encodeDecodeBlock(&prevCreditBlock);    // Decode only, no XOR needed for previous credit
+    return (uint16_t)(prevCreditBlock & 0xFFFF);  // Return LOW 16 bits only
 }
 
 // Add cents with transaction splitting
