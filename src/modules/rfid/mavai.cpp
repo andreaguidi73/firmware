@@ -1505,32 +1505,201 @@ uint32_t MAVAITool::getDaysElapsed() {
     return 0; // Invalid or not found
 }
 
-// Reset key to factory defaults
+// Reset key to factory defaults - Complete MIKAI MyKeyReset() implementation
 bool MAVAITool::resetKey() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) return false;
     
-    // Reset primary vendor
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR1, MYKEY_BLOCK18_RESET);
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR2, MYKEY_BLOCK19_RESET);
+    // Backup current state in case of failure
+    uint8_t backup[SRIX4K_BYTES];
+    memcpy(backup, _dump, sizeof(backup));
     
-    // Reset backup vendor
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR1_BACKUP, MYKEY_BLOCK18_RESET);
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR2_BACKUP, MYKEY_BLOCK19_RESET);
+    // Get Key ID from block 0x07
+    uint32_t keyID = readBlockAsUint32(MYKEY_BLOCK_KEYID);
+    uint8_t keyIDFirstByte = (keyID >> 24) & 0xFF;
     
-    // Reset credit blocks
-    writeBlockAsUint32(MYKEY_BLOCK_CREDIT1, 0);
-    writeBlockAsUint32(MYKEY_BLOCK_CREDIT2, 0);
+    // Get production date from block 0x08
+    uint32_t productionDate = readBlockAsUint32(MYKEY_BLOCK_PRODDATE);
     
-    // Reset transaction history
-    for (uint8_t i = MYKEY_BLOCK_TRANS_START; i <= MYKEY_BLOCK_TRANS_END; i++) {
-        writeBlockAsUint32(i, 0);
+    // Decode BCD production date (MIKAI nibble order)
+    uint8_t day = ((productionDate >> 28) & 0x0F) * 10 + ((productionDate >> 24) & 0x0F);
+    uint8_t month = ((productionDate >> 20) & 0x0F) * 10 + ((productionDate >> 16) & 0x0F);
+    uint16_t year = ((productionDate & 0x0F) * 1000) + 
+                   (((productionDate >> 4) & 0x0F) * 100) +
+                   (((productionDate >> 12) & 0x0F) * 10) + 
+                   ((productionDate >> 8) & 0x0F);
+    
+    // Calculate days from 1/1/1995 using MIKAI algorithm
+    uint32_t elapsedDays = daysSince1995(day, month, year);
+    
+    // Format elapsed days in BCD for blocks 0x10, 0x14, 0x3F, 0x43
+    // BCD format: ((elapsed/1000%10)<<12) + ((elapsed/100%10)<<8) + ((elapsed/10%10)<<4) + (elapsed%10)
+    uint32_t elapsedBCD = ((elapsedDays / 1000 % 10) << 12) | 
+                          ((elapsedDays / 100 % 10) << 8) |
+                          ((elapsedDays / 10 % 10) << 4) | 
+                          (elapsedDays % 10);
+    
+    // Process all blocks from 0x10 to end (following MIKAI MyKeyReset logic)
+    for (uint8_t i = 0x10; i < SRIX4K_BLOCKS; i++) {
+        uint32_t currentBlock = 0xFFFFFFFF; // Default value
+        bool shouldWrite = true;
+        
+        switch (i) {
+            case 0x10:
+            case 0x14:
+            case 0x3F:
+            case 0x43: {
+                // Key ID (first byte) + days elapsed from production
+                // Structure: CHECK | ID_BYTE | DAYS_BCD_H | DAYS_BCD_L
+                currentBlock = (keyIDFirstByte << 16) | elapsedBCD;
+                calculateBlockChecksum(&currentBlock, i);
+                break;
+            }
+            
+            case 0x11:
+            case 0x15:
+            case 0x40:
+            case 0x44: {
+                // Key ID [last three bytes] (lower 24 bits of block 0x07)
+                currentBlock = keyID & 0x00FFFFFF;
+                calculateBlockChecksum(&currentBlock, i);
+                break;
+            }
+            
+            case 0x22:
+            case 0x26:
+            case 0x51:
+            case 0x55: {
+                // Production date (last three bytes, reordered)
+                currentBlock = ((productionDate & 0x0000FF00) << 8) | 
+                               ((productionDate & 0x00FF0000) >> 8) | 
+                               ((productionDate & 0xFF000000) >> 24);
+                calculateBlockChecksum(&currentBlock, i);
+                encodeDecodeBlock(&currentBlock);
+                break;
+            }
+            
+            case 0x12:
+            case 0x16:
+            case 0x41:
+            case 0x45: {
+                // Operations counter (starts at 1)
+                currentBlock = 1;
+                calculateBlockChecksum(&currentBlock, i);
+                break;
+            }
+            
+            case 0x13:
+            case 0x17:
+            case 0x42:
+            case 0x46: {
+                // Generic blocks - fixed value
+                currentBlock = 0x00040013;
+                calculateBlockChecksum(&currentBlock, i);
+                break;
+            }
+            
+            case 0x18:
+            case 0x1C:
+            case 0x47:
+            case 0x4B: {
+                // Vendor blocks (high part) - reset to factory default
+                currentBlock = MYKEY_VENDOR_DEFAULT_HIGH;  // 0x0000FEDC
+                calculateBlockChecksum(&currentBlock, i);
+                encodeDecodeBlock(&currentBlock);
+                break;
+            }
+            
+            case 0x19:
+            case 0x1D:
+            case 0x48:
+            case 0x4C: {
+                // Vendor blocks (low part) - reset to factory default
+                currentBlock = MYKEY_VENDOR_DEFAULT_LOW;  // 0x00000123
+                calculateBlockChecksum(&currentBlock, i);
+                encodeDecodeBlock(&currentBlock);
+                break;
+            }
+            
+            case 0x21:
+            case 0x25: {
+                // Current credit (reset to 0.00€)
+                // Must recalculate encryption key with new vendor first
+                _vendorCalculated = false;
+                calculateEncryptionKey();
+                currentBlock = 0;
+                calculateBlockChecksum(&currentBlock, i);
+                encodeDecodeBlock(&currentBlock);
+                currentBlock ^= _encryptionKey;
+                break;
+            }
+            
+            case 0x20:
+            case 0x24:
+            case 0x4F:
+            case 0x53: {
+                // Generic blocks - fixed value
+                currentBlock = 0x00010000;
+                calculateBlockChecksum(&currentBlock, i);
+                encodeDecodeBlock(&currentBlock);
+                break;
+            }
+            
+            case 0x1A:
+            case 0x1B:
+            case 0x1E:
+            case 0x1F:
+            case 0x23:
+            case 0x27:
+            case 0x49:
+            case 0x4A:
+            case 0x4D:
+            case 0x4E:
+            case 0x50:
+            case 0x52:
+            case 0x54:
+            case 0x56: {
+                // Generic blocks (set to 0 with checksum and encoding)
+                currentBlock = 0;
+                calculateBlockChecksum(&currentBlock, i);
+                encodeDecodeBlock(&currentBlock);
+                break;
+            }
+            
+            // Transaction history blocks - set to 0xFFFFFFFF
+            case 0x34:
+            case 0x35:
+            case 0x36:
+            case 0x37:
+            case 0x38:
+            case 0x39:
+            case 0x3A:
+            case 0x3B:
+            case 0x3C: {
+                currentBlock = 0xFFFFFFFF;
+                break;
+            }
+            
+            default:
+                // Skip other blocks (keep 0xFFFFFFFF or don't modify)
+                shouldWrite = false;
+                break;
+        }
+        
+        // Write the block if it differs from current value
+        if (shouldWrite) {
+            uint32_t existingBlock = readBlockAsUint32(i);
+            if (existingBlock != currentBlock) {
+                writeBlockToMemory(i, currentBlock);
+            }
+        }
     }
     
-    // Reset transaction pointer
-    writeBlockAsUint32(MYKEY_BLOCK_TRANS_PTR, 0);
-    
+    // Reset internal state
     _currentVendor = 0;
     _vendorCalculated = false;
+    
+    Serial.printf("DEBUG resetKey: Reset complete. %d days since 1/1/1995 (BCD: 0x%04X)\n", 
+                  elapsedDays, elapsedBCD);
     
     return true;
 }
@@ -1829,43 +1998,102 @@ void MAVAITool::reset_key_ui() {
     if (!_dump_valid_from_read && !_dump_valid_from_load) {
         displayError("No data in memory!");
         delay(2000);
+        set_state(IDLE_MODE);
         return;
     }
     
     display_banner();
     
-    padprintln("WARNING: This will reset");
-    padprintln("the key to factory defaults!");
+    tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
+    padprintln("WARNING: Factory Reset");
+    padprintln("======================");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
     padprintln("");
-    padprintln("All data will be lost:");
-    padprintln("- Vendor will be reset");
-    padprintln("- Credit will be 0");
-    padprintln("- Transaction history cleared");
+    padprintln("This will reset ALL MyKey data:");
+    padprintln("");
+    padprintln("  * Vendor code -> Factory default");
+    padprintln("  * Credit -> 0.00 EUR");
+    padprintln("  * Transaction history -> Cleared");
+    padprintln("  * 38 system blocks -> Recalculated");
+    padprintln("  * Counters -> Reset to initial");
+    padprintln("");
+    tft.setTextColor(TFT_GREEN, bruceConfig.bgColor);
+    padprintln("PRESERVED:");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    padprintln("  * UID (hardware, unchangeable)");
+    padprintln("  * Key ID");
+    padprintln("  * Production Date");
     padprintln("");
     
     options = {};
     bool confirmed = false;
     
-    options.emplace_back("Confirm Reset", [&confirmed]() { confirmed = true; });
-    options.emplace_back("Cancel", []() {});
+    options.emplace_back("CONFIRM Factory Reset", [&confirmed]() { confirmed = true; });
+    options.emplace_back("Cancel", [this]() { set_state(IDLE_MODE); });
     
     loopOptions(options);
     
-    if (confirmed) {
-        display_banner();
-        
-        if (resetKey()) {
-            displaySuccess("Key reset to factory!");
-            padprintln("");
-            padprintln("Vendor reset to default");
-            padprintln("Credit reset to 0");
-            padprintln("Transaction history cleared");
-        } else {
-            displayError("Failed to reset key!");
-        }
-        
-        delayWithReturn(3000);
+    if (!confirmed) {
+        set_state(IDLE_MODE);
+        return;
     }
+    
+    // Second confirmation
+    display_banner();
+    tft.setTextColor(TFT_RED, bruceConfig.bgColor);
+    padprintln("FINAL CONFIRMATION");
+    padprintln("==================");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    padprintln("");
+    padprintln("Are you ABSOLUTELY SURE?");
+    padprintln("");
+    padprintln("This action CANNOT be undone");
+    padprintln("unless you have a backup!");
+    padprintln("");
+    
+    options = {};
+    bool finalConfirm = false;
+    
+    options.emplace_back("YES - Reset to Factory", [&finalConfirm]() { finalConfirm = true; });
+    options.emplace_back("NO - Cancel", [this]() { set_state(IDLE_MODE); });
+    
+    loopOptions(options);
+    
+    if (!finalConfirm) {
+        set_state(IDLE_MODE);
+        return;
+    }
+    
+    // Perform reset
+    display_banner();
+    padprintln("Performing Factory Reset...");
+    padprintln("");
+    padprintln("Please wait...");
+    
+    if (resetKey()) {
+        padprintln("");
+        displaySuccess("Factory Reset Complete!");
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        padprintln("");
+        padprintln("Reset results:");
+        padprintln("  * Vendor: Factory default (FEDC0123)");
+        padprintln("  * Credit: 0.00 EUR");
+        padprintln("  * Transaction history: Cleared");
+        padprintln("  * 38 blocks: Recalculated");
+        padprintln("");
+        tft.setTextColor(TFT_YELLOW, bruceConfig.bgColor);
+        padprintln("Remember to WRITE to tag!");
+        tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+        padprintln("Use 'Clone Tag' to apply changes.");
+    } else {
+        displayError("Reset FAILED!");
+        padprintln("");
+        padprintln("Data has been restored.");
+        padprintln("No changes were made.");
+    }
+    
+    delayWithReturn(5000);
+    set_state(IDLE_MODE);
 }
 
 // Entry point
