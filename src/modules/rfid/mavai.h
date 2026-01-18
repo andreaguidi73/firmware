@@ -144,6 +144,7 @@ private:
     uint8_t _uid[SRIX_UID_LENGTH];
     bool _dump_valid_from_read = false;
     bool _dump_valid_from_load = false;
+    bool _dump_modified = false;
 
     void display_banner();
     void select_state();
