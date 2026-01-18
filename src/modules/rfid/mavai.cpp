@@ -573,11 +573,11 @@ void MAVAITool::save_file() {
     calculateEncryptionKey();
     
     // Get raw block values for debug
-    uint32_t block6 = readBlockAsUint32(0x06);
-    uint32_t block18_raw = readBlockAsUint32(0x18);
-    uint32_t block19_raw = readBlockAsUint32(0x19);
-    uint32_t block21_raw = readBlockAsUint32(0x21);
-    uint32_t block23_raw = readBlockAsUint32(0x23);
+    uint32_t block6 = readBlockAsUint32(MYKEY_BLOCK_OTP);
+    uint32_t block18_raw = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
+    uint32_t block19_raw = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
+    uint32_t block21_raw = readBlockAsUint32(MYKEY_BLOCK_CREDIT1);
+    uint32_t block23_raw = readBlockAsUint32(MYKEY_BLOCK_PREVCREDIT1);
     
     // Decode vendor blocks for display
     uint32_t b18_dec = block18_raw;
@@ -593,12 +593,9 @@ void MAVAITool::save_file() {
     uint32_t keyID = getKeyID();
     String prodDate = getProductionDate();
     
-    // Calculate OTP values for debug using helper function
+    // Calculate OTP values for debug using helper functions
+    uint32_t otpSwapped = byteSwap32(block6);
     uint32_t otp = calculateOTP(block6);
-    uint32_t otpSwapped = ((block6 & 0x000000FF) << 24) | 
-                          ((block6 & 0x0000FF00) << 8)  |
-                          ((block6 & 0x00FF0000) >> 8)  | 
-                          ((block6 & 0xFF000000) >> 24);
     
     // Write enhanced header
     file.println("Filetype: Bruce MAVAI Dump");
@@ -909,13 +906,18 @@ void MAVAITool::writeBlockToMemory(uint8_t blockNum, uint32_t value) {
     writeBlockAsUint32(blockNum, value);
 }
 
+// Helper: Byte swap 32-bit value (reverse byte order)
+uint32_t MAVAITool::byteSwap32(uint32_t value) {
+    return ((value & 0x000000FF) << 24) | 
+           ((value & 0x0000FF00) << 8)  |
+           ((value & 0x00FF0000) >> 8)  | 
+           ((value & 0xFF000000) >> 24);
+}
+
 // Helper: Calculate OTP from raw block value (byte swap + two's complement)
 uint32_t MAVAITool::calculateOTP(uint32_t otpBlock) {
     // Byte swap: reverse byte order
-    uint32_t otpSwapped = ((otpBlock & 0x000000FF) << 24) | 
-                          ((otpBlock & 0x0000FF00) << 8)  |
-                          ((otpBlock & 0x00FF0000) >> 8)  | 
-                          ((otpBlock & 0xFF000000) >> 24);
+    uint32_t otpSwapped = byteSwap32(otpBlock);
     // Two's complement (NOT + 1)
     return ~otpSwapped + 1;
 }
@@ -993,10 +995,7 @@ void MAVAITool::calculateEncryptionKey() {
     _vendorCalculated = true;
     
     // Debug output
-    uint32_t otpSwapped = ((block6 & 0x000000FF) << 24) | 
-                          ((block6 & 0x0000FF00) << 8)  |
-                          ((block6 & 0x00FF0000) >> 8)  | 
-                          ((block6 & 0xFF000000) >> 24);
+    uint32_t otpSwapped = byteSwap32(block6);
     Serial.printf("DEBUG: OTP raw=0x%08X swapped=0x%08X final=0x%08X\n", block6, otpSwapped, otp);
     Serial.printf("DEBUG: Vendor=0x%08X (+1=0x%08X)\n", vendorBase, vendor);
     Serial.printf("DEBUG: UID=0x%016llX\n", uid);
