@@ -1085,7 +1085,13 @@ bool MAVAITool::addCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
         }
         
         // Update transaction pointer (circular 0-7)
-        current = (current == 7) ? 0 : current + 1;
+        current = (current == (MYKEY_TRANS_HISTORY_SIZE - 1)) ? 0 : current + 1;
+        
+        // Safety check: ensure offset is in valid range
+        if (current >= MYKEY_TRANS_HISTORY_SIZE) {
+            displayError("Transaction offset out of range!");
+            return false;
+        }
         
         // Save transaction history block (0x34 + offset)
         uint32_t txBlock = ((uint32_t)day << 27) | 
@@ -1138,9 +1144,10 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     
     // Backup current state in case of failure
     uint32_t backup21 = readBlockAsUint32(0x21);
-    uint32_t backupTx[9];
-    for (int i = 0; i < 9; i++) {
-        backupTx[i] = readBlockAsUint32(0x34 + i);
+    const int TX_BLOCK_COUNT = MYKEY_BLOCK_TRANS_PTR - MYKEY_BLOCK_TRANS_START + 1;  // 9 blocks
+    uint32_t backupTx[TX_BLOCK_COUNT];
+    for (int i = 0; i < TX_BLOCK_COUNT; i++) {
+        backupTx[i] = readBlockAsUint32(MYKEY_BLOCK_TRANS_START + i);
     }
     
     if (!_vendorCalculated) calculateEncryptionKey();
@@ -1161,8 +1168,8 @@ bool MAVAITool::setCents(uint16_t cents, uint8_t day, uint8_t month, uint16_t ye
     if (!addCents(cents, day, month, year)) {
         // Restore backup on failure
         writeBlockToMemory(0x21, backup21);
-        for (int i = 0; i < 9; i++) {
-            writeBlockToMemory(0x34 + i, backupTx[i]);
+        for (int i = 0; i < TX_BLOCK_COUNT; i++) {
+            writeBlockToMemory(MYKEY_BLOCK_TRANS_START + i, backupTx[i]);
         }
         return false;
     }
@@ -1191,7 +1198,7 @@ uint8_t MAVAITool::getCurrentTransactionOffset() {
     
     // If first transaction (never used), return 7 to start at position 0
     if (block3C == 0xFFFFFFFF) {
-        return 0x07;
+        return MYKEY_TRANS_HISTORY_SIZE - 1;
     }
     
     // Decode: XOR with Key ID lower 3 bytes, then encodeDecodeBlock
@@ -1203,7 +1210,7 @@ uint8_t MAVAITool::getCurrentTransactionOffset() {
     uint8_t offset = (decoded >> 16) & 0xFF;
     
     // Validate range 0-7
-    return (offset > 0x07) ? 0x07 : offset;
+    return (offset >= MYKEY_TRANS_HISTORY_SIZE) ? (MYKEY_TRANS_HISTORY_SIZE - 1) : offset;
 }
 
 // Get Key ID from block 0x07

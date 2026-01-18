@@ -34,6 +34,7 @@
 #define MYKEY_BLOCK_TRANS_START 0x34
 #define MYKEY_BLOCK_TRANS_END 0x3B
 #define MYKEY_BLOCK_TRANS_PTR 0x3C
+#define MYKEY_TRANS_HISTORY_SIZE 8  // Transaction buffer holds 8 entries (0-7)
 
 // Reset values for detection
 #define MYKEY_BLOCK18_RESET 0x8FCD0F48
