@@ -595,9 +595,8 @@ void MAVAITool::save_file() {
     String prodDate = getProductionDate();
     
     // Calculate OTP values
-    uint32_t otpSwapped = ((block6 & 0xFF) << 24) | ((block6 & 0xFF00) << 8) |
-                          ((block6 & 0xFF0000) >> 8) | ((block6 >> 24) & 0xFF);
-    uint32_t otp = ~otpSwapped + 1;
+    uint32_t otpSwapped = byteSwap32(block6);
+    uint32_t otp = calculateOTP(block6);
     
     // Lock ID and Bound status
     bool lockIdSet = (block5 & 0x000000FF) == 0x7F;

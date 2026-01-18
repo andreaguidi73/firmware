@@ -1883,7 +1883,7 @@ async function mavaiNewDump() {
         creditEur: '0.00',
         prevCreditCents: 0,
         prevCreditEur: '0.00',
-        blocks: Array(128).fill('FFFFFFFF')
+        blocks: Array(128).fill('00000000')
     };
     
     const content = generateMavaiFileContent(template);
