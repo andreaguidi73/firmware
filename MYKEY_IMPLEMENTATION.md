@@ -121,20 +121,31 @@ After making any modifications:
 ### Vendor Code
 - Stored as 32-bit unsigned integer
 - Actual value stored is (vendor - 1)
-- Split across two blocks and encoded
-- Duplicated in primary and backup locations
+- Split into upper and lower 16-bit parts
+- Each part is stored in the **upper 16 bits** of its respective block:
+  - Block 0x18: vendorHigh in upper 16 bits (bits 31-16)
+  - Block 0x19: vendorLow in upper 16 bits (bits 31-16)
+  - Lower 16 bits contain checksum and metadata
+- Blocks are encoded using encodeDecodeBlock algorithm
+- Duplicated in primary (0x18-0x19) and backup (0x1C-0x1D) locations
+- Example: Vendor 0x04436ABD → stored as 0x04436ABC (vendor-1)
+  - vendorHigh = 0x0443 → stored in upper 16 bits of block 0x18
+  - vendorLow = 0x6ABC → stored in upper 16 bits of block 0x19
 
 ### Credit
 - Stored in cents (e.g., 500 = 5.00 EUR)
-- Upper 16 bits of block: credit amount
-- Lower 16 bits of block: date stamp (days since 1/1/1995)
+- Upper 16 bits of block: credit amount (bits 31-16)
+- Lower 16 bits of block: date stamp (days since 1/1/1995) (bits 15-0)
 - Block is encoded using encodeDecodeBlock algorithm
+- Credit extraction: `credit = (decodedBlock >> 16) & 0xFFFF`
+- Same format applies to both current (0x21) and previous (0x25) credit blocks
 
 ### Encryption Key
 - SK = UID × Vendor × OTP
-- UID: 64-bit card unique identifier
-- Vendor: 32-bit vendor code (decoded)
-- OTP: 32-bit one-time programmable value (byte-swapped, two's complement)
+- UID: First 4 bytes of 8-byte UID in little-endian order
+- Vendor: 32-bit vendor code extracted from upper 16 bits of decoded blocks 0x18 and 0x19
+- OTP: 32-bit one-time programmable value from block 0x06 (byte-swapped, two's complement)
+- Final key: Lower 32 bits of 64-bit multiplication result
 
 ## Technical Details
 
@@ -146,6 +157,41 @@ Dates are stored as days elapsed since January 1, 1995. The `daysDifference()` f
 
 ### Transaction History
 Up to 8 transactions are stored in a circular buffer (blocks 0x34-0x3B). The pointer in block 0x3C (0-7) indicates the next transaction slot.
+
+## Recent Fixes (January 2026)
+
+### Vendor and Credit Calculation Fix
+**Date**: 2026-01-17  
+**Issue**: Vendor calculation was incorrectly using the entire 32-bit decoded block values instead of extracting only the upper 16 bits.
+
+**Root Cause**: 
+- The original implementation used `vendorRaw = (block18 << 16) | (block19 & 0xFFFF)`, which incorrectly shifted the entire 32-bit block18 value
+- This didn't match the specification that vendor and credit both use the **upper 16 bits** of decoded blocks
+
+**Fix Applied**:
+1. **exportVendor()**: Now extracts upper 16 bits from each decoded block:
+   ```cpp
+   uint16_t vendorHigh = (block18 >> 16) & 0xFFFF;
+   uint16_t vendorLow = (block19 >> 16) & 0xFFFF;
+   uint32_t vendorRaw = ((uint32_t)vendorHigh << 16) | vendorLow;
+   ```
+
+2. **importVendor()**: Now places vendor parts in upper 16 bits before checksum calculation:
+   ```cpp
+   uint32_t block18 = ((uint32_t)vendorHigh << 16);
+   calculateBlockChecksum(&block18, 0x18);
+   encodeDecodeBlock(&block18);
+   ```
+
+3. **Backup blocks**: Now have separate checksum calculations with correct block numbers (0x1C, 0x1D)
+
+4. **getCurrentCredit()**: Verified as already correct (was already extracting upper 16 bits)
+
+**Result**: Vendor calculations now match expected values. For example:
+- Expected vendor: 71523197 (0x04436ABD)
+- Stored as: 0x04436ABC (vendor-1)
+- vendorHigh: 0x0443, vendorLow: 0x6ABC
+- Both stored in upper 16 bits of their respective blocks
 
 ## Testing Checklist
 

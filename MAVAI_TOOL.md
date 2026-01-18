@@ -23,12 +23,14 @@ MAVAI (MyKey Advanced Vendor Authenticator Interface) is a comprehensive NFC too
 #### Encryption Key Calculation
 Calculates the MyKey encryption key using the formula:
 ```
-SK = UID × Vendor × OTP
+SK = UID × Vendor × OTP (lower 32 bits of result)
 ```
 Where:
-- **UID**: 64-bit unique identifier from the card
-- **Vendor**: 32-bit vendor code (decoded from blocks 0x18/0x19)
+- **UID**: First 4 bytes of 8-byte UID in little-endian format
+- **Vendor**: 32-bit vendor code extracted from upper 16 bits of decoded blocks 0x18/0x19
 - **OTP**: One-Time Programmable value from block 0x06 (byte-swapped, two's complement)
+
+**Note**: Vendor is stored as (vendor - 1) and must be decoded before use in calculation.
 
 #### Block Encode/Decode
 XOR-based bit swapping operations for MyKey block obfuscation:
@@ -39,14 +41,20 @@ This cryptographic function provides data obfuscation for vendor codes and credi
 
 #### Credit Management
 - **getCurrentCredit()**: Read current credit from block 0x21 (XOR decrypted)
+  - Extracts upper 16 bits: `credit = (decodedBlock >> 16) & 0xFFFF`
+  - Lower 16 bits contain date stamp (days since 1/1/1995)
 - **addCents()**: Add credits with transaction history logging (blocks 0x34-0x3C)
 - **setCents()**: Set absolute credit value
 - Display credit in EUR format (cents / 100)
 
 #### Vendor Operations
 - **exportVendor()**: Extract vendor ID from blocks 0x18/0x19
+  - Decodes blocks and extracts upper 16 bits from each
+  - Concatenates: `vendor = ((block18_upper16 << 16) | block19_upper16) + 1`
 - **importVendor()**: Write new vendor ID with proper checksum recalculation
-- Automatic vendor blocks mirroring to 0x1C/0x1D (backup)
+  - Stores vendor-1 in upper 16 bits of blocks
+  - Calculates checksums with correct block numbers
+- Automatic vendor blocks mirroring to 0x1C/0x1D (backup) with separate checksums
 
 #### Key Information Display
 - **Key ID**: From block 0x07

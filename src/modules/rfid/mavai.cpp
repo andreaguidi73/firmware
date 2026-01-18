@@ -910,18 +910,18 @@ void MAVAITool::calculateEncryptionKey() {
     otp = ~((otp << 24) | ((otp & 0x0000FF00) << 8) |
             ((otp & 0x00FF0000) >> 8) | (otp >> 24)) + 1;
     
-    // Read and decode vendor blocks temporarily
+    // Read and decode vendor blocks to extract vendor
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
-    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
-    
     encodeDecodeBlock(&block18);
-    encodeDecodeBlock(&block19);
+    uint16_t vendorHigh = (block18 >> 16) & 0xFFFF;
     
-    // Extract vendor (stored as vendor - 1)
-    // After decode, reconstruct vendor from upper and lower 16-bit parts
-    uint32_t vendorRaw = (block18 << 16) | (block19 & 0xFFFF);
+    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
+    encodeDecodeBlock(&block19);
+    uint16_t vendorLow = (block19 >> 16) & 0xFFFF;
+    
+    // Reconstruct vendor (stored as vendor-1)
+    uint32_t vendorRaw = ((uint32_t)vendorHigh << 16) | vendorLow;
     uint32_t vendor = vendorRaw + 1;
-    // _currentVendor stores the actual vendor value (not the stored value)
     _currentVendor = vendor;
     
     // Calculate encryption key using 4-byte UID (truncated to 32-bit)
@@ -938,9 +938,17 @@ void MAVAITool::importVendor(uint32_t vendor) {
     // Vendor is stored as (vendor - 1)
     uint32_t vendorMinusOne = vendor - 1;
     
-    // Prepare blocks with vendor data
-    uint32_t block18 = (vendorMinusOne >> 16);
-    uint32_t block19 = (vendorMinusOne & 0xFFFF);
+    // Split into upper 16 bits and lower 16 bits
+    uint16_t vendorHigh = (vendorMinusOne >> 16) & 0xFFFF;
+    uint16_t vendorLow = vendorMinusOne & 0xFFFF;
+    
+    // Prepare block 0x18: vendor high in upper 16 bits
+    uint32_t block18 = ((uint32_t)vendorHigh << 16);
+    calculateBlockChecksum(&block18, 0x18);
+    
+    // Prepare block 0x19: vendor low in upper 16 bits
+    uint32_t block19 = ((uint32_t)vendorLow << 16);
+    calculateBlockChecksum(&block19, 0x19);
     
     // Encode for storage
     encodeDecodeBlock(&block18);
@@ -950,9 +958,18 @@ void MAVAITool::importVendor(uint32_t vendor) {
     writeBlockAsUint32(MYKEY_BLOCK_VENDOR1, block18);
     writeBlockAsUint32(MYKEY_BLOCK_VENDOR2, block19);
     
+    // Prepare backup blocks with CORRECT block numbers for checksum
+    uint32_t block1C = ((uint32_t)vendorHigh << 16);
+    calculateBlockChecksum(&block1C, 0x1C);  // Block 0x1C checksum
+    encodeDecodeBlock(&block1C);
+    
+    uint32_t block1D = ((uint32_t)vendorLow << 16);
+    calculateBlockChecksum(&block1D, 0x1D);  // Block 0x1D checksum
+    encodeDecodeBlock(&block1D);
+    
     // Write backup vendor (blocks 0x1C, 0x1D)
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR1_BACKUP, block18);
-    writeBlockAsUint32(MYKEY_BLOCK_VENDOR2_BACKUP, block19);
+    writeBlockAsUint32(MYKEY_BLOCK_VENDOR1_BACKUP, block1C);
+    writeBlockAsUint32(MYKEY_BLOCK_VENDOR2_BACKUP, block1D);
     
     _currentVendor = vendor;
     _vendorCalculated = false;
@@ -966,17 +983,21 @@ void MAVAITool::exportVendor(uint32_t *vendor) {
         return;
     }
     
-    // Read blocks (don't modify originals)
+    // Read and decode block 0x18
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
-    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
-    
-    // Decode to read
     encodeDecodeBlock(&block18);
-    encodeDecodeBlock(&block19);
+    uint16_t vendorHigh = (block18 >> 16) & 0xFFFF;
     
-    // Extract vendor (stored as vendor - 1)
-    // After decode, reconstruct vendor from upper and lower 16-bit parts
-    uint32_t vendorRaw = (block18 << 16) | (block19 & 0xFFFF);
+    // Read and decode block 0x19
+    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
+    encodeDecodeBlock(&block19);
+    uint16_t vendorLow = (block19 >> 16) & 0xFFFF;
+    
+    // Concatenate: vendorHigh (upper 16 bits) + vendorLow (lower 16 bits)
+    // Example: ABCD + 1234 = ABCD1234
+    uint32_t vendorRaw = ((uint32_t)vendorHigh << 16) | vendorLow;
+    
+    // Stored as vendor-1, so add 1 to get actual vendor
     *vendor = vendorRaw + 1;
 }
 
@@ -1000,10 +1021,10 @@ uint16_t MAVAITool::getCurrentCredit() {
     // Decode block
     encodeDecodeBlock(&block21);
     
-    // Extract credit from upper 16 bits
+    // Extract credit from upper 16 bits (in cents)
     uint16_t credit = (block21 >> 16) & 0xFFFF;
     
-    return credit;
+    return credit; // Return in cents, UI divides by 100 for EUR display
 }
 
 // Get previous credit from block 0x25
