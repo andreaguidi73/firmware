@@ -41,6 +41,10 @@
 #define MYKEY_BLOCK18_RESET 0x8FCD0F48
 #define MYKEY_BLOCK19_RESET 0xC0820007
 
+// Default vendor values for reset (FEDC0123 - factory default vendor)
+#define MYKEY_VENDOR_DEFAULT_HIGH 0x0000FEDC
+#define MYKEY_VENDOR_DEFAULT_LOW 0x00000123
+
 class MAVAITool {
 public:
     enum MAVAI_State {
