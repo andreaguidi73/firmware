@@ -23,6 +23,7 @@ MAVAITool::MAVAITool() {
     _encryptionKey = 0;
     _currentVendor = 0;
     _vendorCalculated = false;
+    clearAllModifiedFlags();
     setup();
 }
 
@@ -320,7 +321,15 @@ void MAVAITool::read_tag() {
     _dump_valid_from_read = true;
     _dump_valid_from_load = false;
     _dump_modified = false; // Reset modified flag when reading a new tag
+    clearAllModifiedFlags(); // Clear block modification flags
     _vendorCalculated = false; // Reset vendor calculation flag
+    
+    // Validate manufacturer code
+    if (!validateManufacturerCode()) {
+        displayWarning("Warning: Unknown manufacturer");
+        padprintln("Expected SRIX4K (D0 02)");
+        delay(1500);
+    }
     
     padprintln("");
     padprintln("");
@@ -358,12 +367,34 @@ void MAVAITool::write_tag() {
         return;
     }
 
+    // Count modified blocks
+    uint8_t modified_count = 0;
+    for (uint8_t b = 0; b < SRIX4K_BLOCKS; b++) {
+        if (isBlockModified(b) && isBlockWritable(b)) modified_count++;
+    }
+    
+    // If dump was loaded from file, write all writable blocks
+    // If dump was modified in memory, write only modified blocks
+    bool write_all = _dump_valid_from_load;
+    
+    if (!write_all && modified_count == 0) {
+        displayError("No blocks to write!");
+        delay(2000);
+        set_state(IDLE_MODE);
+        return;
+    }
+
     if (!waitForTag()) return;
 
     display_banner();
     padprintln("Tag detected!");
     padprintln("");
-    padprintln("Writing 128 blocks...");
+    
+    if (write_all) {
+        padprintln("Writing all blocks...");
+    } else {
+        padprintln("Writing " + String(modified_count) + " modified blocks...");
+    }
     padprintln("");
     padprint("Please Wait");
 
@@ -372,24 +403,54 @@ void MAVAITool::write_tag() {
     uint8_t blocks_failed = 0;
     String failed_blocks = "";
 
-    for (uint8_t b = 0; b < SRIX4K_BLOCKS; b++) {
-        const uint16_t off = (uint16_t)b * 4;
-        block[0] = _dump[off + 0];
-        block[1] = _dump[off + 1];
-        block[2] = _dump[off + 2];
-        block[3] = _dump[off + 3];
+    if (write_all) {
+        // Write all blocks
+        for (uint8_t b = 0; b < SRIX4K_BLOCKS; b++) {
+            const uint16_t off = (uint16_t)b * 4;
+            block[0] = _dump[off + 0];
+            block[1] = _dump[off + 1];
+            block[2] = _dump[off + 2];
+            block[3] = _dump[off + 3];
 
-        if (!nfc->SRIX_write_block(b, block)) {
-            blocks_failed++;
-            if (blocks_failed <= 10) {
-                if (failed_blocks.length() > 0) failed_blocks += ",";
-                failed_blocks += String(b);
+            if (!nfc->SRIX_write_block(b, block)) {
+                blocks_failed++;
+                if (blocks_failed <= 10) {
+                    if (failed_blocks.length() > 0) failed_blocks += ",";
+                    failed_blocks += String(b);
+                }
+            } else {
+                blocks_written++;
             }
-        } else {
-            blocks_written++;
-        }
 
-        progressHandler(b + 1, SRIX4K_BLOCKS, "Writing data blocks");
+            progressHandler(b + 1, SRIX4K_BLOCKS, "Writing data blocks");
+        }
+    } else {
+        // Write only modified blocks
+        uint8_t processed = 0;
+        for (uint8_t b = 0; b < SRIX4K_BLOCKS; b++) {
+            if (!isBlockModified(b)) continue;
+            if (!isBlockWritable(b)) continue;
+            
+            processed++;
+            
+            const uint16_t off = (uint16_t)b * 4;
+            block[0] = _dump[off + 0];
+            block[1] = _dump[off + 1];
+            block[2] = _dump[off + 2];
+            block[3] = _dump[off + 3];
+
+            if (!nfc->SRIX_write_block(b, block)) {
+                blocks_failed++;
+                if (blocks_failed <= 10) {
+                    if (failed_blocks.length() > 0) failed_blocks += ",";
+                    failed_blocks += String(b);
+                }
+            } else {
+                blocks_written++;
+            }
+
+            progressHandler(processed, modified_count, "Writing modified blocks");
+        }
     }
 
     padprintln("");
@@ -399,10 +460,11 @@ void MAVAITool::write_tag() {
     if (blocks_failed == 0) {
         displaySuccess("Write complete!", true);
         _dump_modified = false; // Reset modified flag after successful write
+        clearAllModifiedFlags(); // Clear block modification flags
     } else if (blocks_written > 0) {
         displayWarning("Partial write!", true);
         padprintln("");
-        padprintln("Written: " + String(blocks_written) + "/128");
+        padprintln("Written: " + String(blocks_written) + "/" + String(write_all ? SRIX4K_BLOCKS : modified_count));
         padprintln("Failed: " + String(blocks_failed));
         padprintln("");
         tft.setTextSize(FP);
@@ -909,6 +971,7 @@ void MAVAITool::load_file_data(FS *fs, String filepath) {
     _dump_valid_from_load = true;
     _dump_valid_from_read = false;
     _dump_modified = false; // Reset modified flag when loading a dump file
+    clearAllModifiedFlags(); // Clear block modification flags
 
     displaySuccess("Dump loaded successfully!");
     delay(1000);
@@ -945,6 +1008,80 @@ void MAVAITool::load_file_data(FS *fs, String filepath) {
 void MAVAITool::delayWithReturn(uint32_t ms) {
     auto tm = millis();
     while (millis() - tm < ms && !returnToMenu) { vTaskDelay(pdMS_TO_TICKS(50)); }
+}
+
+// ============================================================================
+// Block Tracking System Implementation
+// ============================================================================
+
+void MAVAITool::clearAllModifiedFlags() {
+    memset(_blockModified, false, sizeof(_blockModified));
+}
+
+void MAVAITool::setBlockModified(uint8_t blockNum) {
+    if (blockNum < SRIX4K_BLOCKS) {
+        _blockModified[blockNum] = true;
+    }
+}
+
+bool MAVAITool::isBlockModified(uint8_t blockNum) {
+    if (blockNum >= SRIX4K_BLOCKS) return false;
+    return _blockModified[blockNum];
+}
+
+uint8_t MAVAITool::getBlockType(uint8_t blockNum) {
+    if (blockNum <= 0x04) return SRIX_BLOCK_TYPE_SYSTEM;      // System blocks (read-only)
+    if (blockNum <= 0x06) return SRIX_BLOCK_TYPE_OTP;         // OTP blocks
+    if (blockNum <= 0x0F) return SRIX_BLOCK_TYPE_LOCKABLE;    // Lockable blocks
+    return SRIX_BLOCK_TYPE_EEPROM;                            // EEPROM blocks
+}
+
+bool MAVAITool::isBlockWritable(uint8_t blockNum) {
+    uint8_t type = getBlockType(blockNum);
+    // System blocks are read-only, OTP can only be written once
+    return (type == SRIX_BLOCK_TYPE_LOCKABLE || type == SRIX_BLOCK_TYPE_EEPROM);
+}
+
+bool MAVAITool::validateManufacturerCode() {
+    // UID bytes 7 and 6 contain manufacturer code (in reverse order from tag)
+    // After reading, _uid[0] and _uid[1] should be checked based on byte order
+    // Standard SRIX4K manufacturer code is 0xD0 0x02
+    return (_uid[7] == SRIX_MANUFACTURER_BYTE1 && _uid[6] == SRIX_MANUFACTURER_BYTE2);
+}
+
+void MAVAITool::modifyBlock(uint8_t blockNum, uint8_t* data) {
+    if (blockNum >= SRIX4K_BLOCKS || !data) return;
+    
+    uint16_t offset = blockNum * SRIX_BLOCK_LENGTH;
+    
+    // Check if data is actually different
+    if (memcmp(&_dump[offset], data, SRIX_BLOCK_LENGTH) != 0) {
+        memcpy(&_dump[offset], data, SRIX_BLOCK_LENGTH);
+        setBlockModified(blockNum);
+        _dump_modified = true;
+    }
+}
+
+uint8_t MAVAITool::writeModifiedBlocksToTag() {
+    uint8_t blocks_written = 0;
+    uint8_t block[4];
+    
+    for (uint8_t b = 0; b < SRIX4K_BLOCKS; b++) {
+        if (!isBlockModified(b)) continue;
+        if (!isBlockWritable(b)) continue;
+        
+        const uint16_t off = (uint16_t)b * SRIX_BLOCK_LENGTH;
+        block[0] = _dump[off + 0];
+        block[1] = _dump[off + 1];
+        block[2] = _dump[off + 2];
+        block[3] = _dump[off + 3];
+        
+        if (nfc->SRIX_write_block(b, block)) {
+            blocks_written++;
+        }
+    }
+    
+    return blocks_written;
 }
 
 // ============================================================================
@@ -999,6 +1136,7 @@ void MAVAITool::writeBlockAsUint32(uint8_t blockNum, uint32_t value) {
 // Helper: Write uint32_t to memory (alias for consistency with problem statement)
 void MAVAITool::writeBlockToMemory(uint8_t blockNum, uint32_t value) {
     writeBlockAsUint32(blockNum, value);
+    setBlockModified(blockNum);
 }
 
 // Helper: Byte swap 32-bit value (reverse byte order)
