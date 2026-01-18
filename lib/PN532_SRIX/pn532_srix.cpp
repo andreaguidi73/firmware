@@ -247,7 +247,7 @@ bool Arduino_PN532_SRIX::SRIX_write_block(uint8_t address, uint8_t *block) {
     // Wait for PN532 to be ready (SRIX4K write takes ~5ms)
     if (!waitReady(100)) return false;
 
-    // Read response to verify write success
+    // Read response to verify write success (10 bytes: status + 1 byte from tag)
     readData(_packetbuffer, 10);
 
     // Check status byte: 0x00 = success
