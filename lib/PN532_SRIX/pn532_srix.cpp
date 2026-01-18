@@ -257,8 +257,7 @@ bool Arduino_PN532_SRIX::SRIX_write_block(uint8_t address, uint8_t *block) {
     if (!SRIX_read_block(address, verify)) return false;
 
     // Compare written data with read data
-    return (verify[0] == block[0] && verify[1] == block[1] && 
-            verify[2] == block[2] && verify[3] == block[3]);
+    return (memcmp(verify, block, 4) == 0);
 }
 
 bool Arduino_PN532_SRIX::SRIX_get_uid(uint8_t *buffer) {
