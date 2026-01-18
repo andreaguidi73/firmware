@@ -244,12 +244,19 @@ bool Arduino_PN532_SRIX::SRIX_write_block(uint8_t address, uint8_t *block) {
 
     if (!sendCommandCheckAck(_packetbuffer, 7)) return false;
 
-    // Wait for SRIX4K programming time (~5ms)
+    // Wait for SRIX4K programming time (~5ms typical, 10ms for safety)
     delay(10);
     
-    // Read and discard PN532 response (SRIX write has no tag response)
+    // SRIX protocol quirk: The tag does NOT send a response after write command.
+    // The PN532 will return error code 0x01 (timeout) which is EXPECTED behavior.
+    // We should NOT treat this as a failure.
     if (waitReady(100)) {
         readData(_packetbuffer, 10);
+        // Error code 0x01 means "timeout waiting for tag response" - this is expected!
+        // Only treat other errors as real failures
+        if (_packetbuffer[7] != 0x00 && _packetbuffer[7] != 0x01) {
+            return false;
+        }
     }
 
     // Verify write by reading back the block

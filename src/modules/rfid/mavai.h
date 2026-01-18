@@ -18,6 +18,16 @@
 #define SRIX_BLOCK_LENGTH 4
 #define SRIX_UID_LENGTH 8
 
+// Block types for SRIX4K memory layout
+#define SRIX_BLOCK_TYPE_SYSTEM     0  // System blocks (0x00-0x04) - read-only
+#define SRIX_BLOCK_TYPE_OTP        1  // One-Time Programmable (block 0x05, 0x06)
+#define SRIX_BLOCK_TYPE_LOCKABLE   2  // Lockable blocks (0x07-0x0F)
+#define SRIX_BLOCK_TYPE_EEPROM     3  // EEPROM data blocks (0x10-0x7F)
+
+// SRIX4K Manufacturer code (first 2 bytes of UID)
+#define SRIX_MANUFACTURER_BYTE1    0xD0
+#define SRIX_MANUFACTURER_BYTE2    0x02
+
 // MyKey specific blocks
 #define MYKEY_BLOCK_OTP 0x06
 #define MYKEY_BLOCK_KEYID 0x07
@@ -148,6 +158,25 @@ private:
     bool _dump_valid_from_read = false;
     bool _dump_valid_from_load = false;
     bool _dump_modified = false;
+    
+    // Block modification tracking (SrixFlag equivalent)
+    bool _blockModified[SRIX4K_BLOCKS];
+    
+    // Block management functions
+    void clearAllModifiedFlags();
+    void setBlockModified(uint8_t blockNum);
+    bool isBlockModified(uint8_t blockNum);
+    uint8_t getBlockType(uint8_t blockNum);
+    bool isBlockWritable(uint8_t blockNum);
+    
+    // Manufacturer validation
+    bool validateManufacturerCode();
+    
+    // Selective write function
+    uint8_t writeModifiedBlocksToTag();  // Returns number of blocks written
+    
+    // Modified block write helper (sets flag automatically)
+    void modifyBlock(uint8_t blockNum, uint8_t* data);
 
     void display_banner();
     void select_state();
