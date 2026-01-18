@@ -1067,7 +1067,7 @@ void MAVAITool::calculateEncryptionKey() {
     uint32_t block6 = readBlockAsUint32(MYKEY_BLOCK_OTP);  // 0x06
     uint32_t otp = calculateOTP(block6);
     
-    // 2. Vendor Extraction - DECODE FIRST, EXTRACT LOW 16 BITS, +1
+    // 2. Vendor Extraction - DECODE FIRST, EXTRACT UPPER 16 BITS, +1
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);  // 0x18
     uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);  // 0x19
     
@@ -1075,8 +1075,8 @@ void MAVAITool::calculateEncryptionKey() {
     encodeDecodeBlock(&block18);
     encodeDecodeBlock(&block19);
     
-    // Extract LOW 16 bits from each, combine, ADD 1
-    uint32_t vendorBase = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
+    // Extract UPPER 16 bits from each, combine, ADD 1 for encryption
+    uint32_t vendorBase = (((block18 >> 16) & 0xFFFF) << 16) | ((block19 >> 16) & 0xFFFF);
     uint32_t vendor = vendorBase + 1;  // CRITICAL: +1 after extraction for encryption key only!
     
     // Note: blocks are not re-encoded because we only used temporary copies
@@ -1108,38 +1108,47 @@ void MAVAITool::importVendor(uint32_t vendor) {
     credit21 ^= _encryptionKey;
     credit25 ^= _encryptionKey;
     
-    // 2. Create new vendor blocks with checksum and encoding
-    uint32_t block18 = (vendor >> 16) & 0x0000FFFF;  // HIGH 16 bits
+    // Vendor is stored as (vendor - 1)
+    uint32_t vendorMinusOne = vendor - 1;
+    
+    // Split into upper 16 bits and lower 16 bits
+    uint16_t vendorHigh = (vendorMinusOne >> 16) & 0xFFFF;
+    uint16_t vendorLow = vendorMinusOne & 0xFFFF;
+    
+    // 2. Prepare block 0x18: vendor high in UPPER 16 bits (bits 31-16)
+    uint32_t block18 = ((uint32_t)vendorHigh << 16);
     calculateBlockChecksum(&block18, 0x18);
     encodeDecodeBlock(&block18);
     writeBlockToMemory(0x18, block18);
     
-    uint32_t block19 = vendor & 0x0000FFFF;  // LOW 16 bits
+    // 3. Prepare block 0x19: vendor low in UPPER 16 bits (bits 31-16)
+    uint32_t block19 = ((uint32_t)vendorLow << 16);
     calculateBlockChecksum(&block19, 0x19);
     encodeDecodeBlock(&block19);
     writeBlockToMemory(0x19, block19);
     
-    // 3. Recalculate encryption key with NEW vendor
+    // 4. Recalculate encryption key with NEW vendor
     _vendorCalculated = false;
     calculateEncryptionKey();
     
-    // 4. Re-encode credit blocks with NEW encryption key
+    // 5. Re-encode credit blocks with NEW encryption key
     credit21 ^= _encryptionKey;
     credit25 ^= _encryptionKey;
     writeBlockToMemory(0x21, credit21);
     writeBlockToMemory(0x25, credit25);
     
-    // 5. Mirror to backup blocks 0x1C/0x1D
-    uint32_t block1C = (vendor >> 16) & 0x0000FFFF;
-    calculateBlockChecksum(&block1C, 0x1C);
+    // 6. Prepare backup blocks with CORRECT block numbers for checksum
+    uint32_t block1C = ((uint32_t)vendorHigh << 16);
+    calculateBlockChecksum(&block1C, 0x1C);  // Block 0x1C checksum (not 0x18!)
     encodeDecodeBlock(&block1C);
     writeBlockToMemory(0x1C, block1C);
     
-    uint32_t block1D = vendor & 0x0000FFFF;
-    calculateBlockChecksum(&block1D, 0x1D);
+    uint32_t block1D = ((uint32_t)vendorLow << 16);
+    calculateBlockChecksum(&block1D, 0x1D);  // Block 0x1D checksum (not 0x19!)
     encodeDecodeBlock(&block1D);
     writeBlockToMemory(0x1D, block1D);
     
+    _currentVendor = vendor;
     _dump_modified = true; // Mark dump as modified
 }
 
@@ -1151,15 +1160,21 @@ void MAVAITool::exportVendor(uint32_t *vendor) {
         return;
     }
     
+    // Read and decode block 0x18
     uint32_t block18 = readBlockAsUint32(MYKEY_BLOCK_VENDOR1);
-    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
-    
-    // Decode temporarily
     encodeDecodeBlock(&block18);
-    encodeDecodeBlock(&block19);
+    uint16_t vendorHigh = (block18 >> 16) & 0xFFFF;  // UPPER 16 bits
     
-    // Extract LOW 16 bits from each, combine (NO +1!)
-    *vendor = ((block18 & 0x0000FFFF) << 16) | (block19 & 0x0000FFFF);
+    // Read and decode block 0x19
+    uint32_t block19 = readBlockAsUint32(MYKEY_BLOCK_VENDOR2);
+    encodeDecodeBlock(&block19);
+    uint16_t vendorLow = (block19 >> 16) & 0xFFFF;   // UPPER 16 bits
+    
+    // Concatenate: vendorHigh (upper 16 bits) + vendorLow (lower 16 bits)
+    uint32_t vendorRaw = ((uint32_t)vendorHigh << 16) | vendorLow;
+    
+    // Add 1 because vendor is stored as (vendor - 1)
+    *vendor = vendorRaw + 1;
 }
 
 // Check if key is in factory reset state
