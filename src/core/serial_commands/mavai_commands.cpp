@@ -2,11 +2,12 @@
 #include "modules/rfid/mavai_serial_menu.h"
 #include <globals.h>
 
-static void mavaiCallback(cmd *c) {
+static uint32_t mavaiCallback(cmd *c) {
     Command cmd(c);
     serialDevice->println("Starting MAVAI Serial Manager...");
     MAVAISerialMenu menu;
     menu.run();
+    return 0;
 }
 
 void createMavaiCommands(SimpleCLI *cli) {
