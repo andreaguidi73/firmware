@@ -5,6 +5,7 @@
 #include "gpio_commands.h"
 #include "interpreter_commands.h"
 #include "ir_commands.h"
+#include "mavai_commands.h"
 #include "power_commands.h"
 #include "rf_commands.h"
 #include "screen_commands.h"
@@ -48,6 +49,7 @@ void SerialCli::setup() {
 #endif
 #ifndef LITE_VERSION
     createInterpreterCommands(&_cli);
+    createMavaiCommands(&_cli);
 #endif
 #ifdef HAS_SCREEN
     createScreenCommands(&_cli);

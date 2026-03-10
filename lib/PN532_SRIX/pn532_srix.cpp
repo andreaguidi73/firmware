@@ -1,30 +1,27 @@
 /*
  * This file is part of arduino-pn532-srix.
- * arduino-pn532-srix is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * arduino-pn532-srix is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- * You should have received a copy of the GNU General Public License
- * along with arduino-pn532-srix.  If not, see <http://www.gnu.org/licenses/>.
- *
  * @author Lilz
- * @license  GNU Lesser General Public License v3.0 (see license.txt)
- *  Refactored by Senape3000 to reuse Adafruit_PN532 constants only (v1.2)
- *  This is a library for the communication with an I2C PN532 NFC/RFID breakout board.
- *  adapted from Adafruit's library.
- *  This library supports only I2C to communicate.
+ * @license GNU Lesser General Public License v3.0
+ * Refactored by Senape3000, Fixed by andreaguidi73
  */
 
 #include "pn532_srix.h"
+#include <string.h> // For memcmp
 
 // Static ACK pattern
 static const uint8_t pn532ack[] = {0x00, 0x00, 0xFF, 0x00, 0xFF, 0x00};
 static const uint8_t pn532response_firmwarevers[] = {0x00, 0x00, 0xFF, 0x06, 0xFA, 0xD5};
+
+// Debug macros
+#ifdef PN532_SRIX_DEBUG
+    #define DEBUG_PRINT(...) PN532_DEBUG_PRINT.print(__VA_ARGS__)
+    #define DEBUG_PRINTLN(...) PN532_DEBUG_PRINT.println(__VA_ARGS__)
+    #define DEBUG_PRINTHEX(x) PN532_DEBUG_PRINT.print(x, HEX)
+#else
+    #define DEBUG_PRINT(...)
+    #define DEBUG_PRINTLN(...)
+    #define DEBUG_PRINTHEX(x)
+#endif
 
 // ========== CONSTRUCTORS ==========
 
@@ -68,7 +65,7 @@ bool Arduino_PN532_SRIX::SAMConfig() {
 
 void Arduino_PN532_SRIX::readData(uint8_t *buffer, uint8_t n) {
     delay(2);
-    Wire.requestFrom((uint8_t)PN532_I2C_ADDRESS, (uint8_t)(n + 2));
+    Wire.requestFrom((uint8_t)PN532_I2C_ADDRESS, (uint8_t)(n + 1));
 
     // Discard RDY byte
     Wire.read();
@@ -83,70 +80,12 @@ void Arduino_PN532_SRIX::readData(uint8_t *buffer, uint8_t n) {
 bool Arduino_PN532_SRIX::readACK() {
     uint8_t ackBuffer[6];
     readData(ackBuffer, 6);
-
-#ifdef SRIX_LIB_DEBUG
-    Serial.print("[PN532] ACK Read: ");
-    for(int i=0; i<6; i++) {
-        if(ackBuffer[i] < 0x10) Serial.print("0");
-        Serial.print(ackBuffer[i], HEX);
-        Serial.print(" ");
-    }
-    Serial.println();
-#endif
-
-    bool result = (memcmp(ackBuffer, pn532ack, 6) == 0);
-    
-#ifdef SRIX_LIB_DEBUG
-    if(!result) Serial.println("[PN532] ❌ ACK Failed");
-#endif
-
-    return result;
+    return (memcmp(ackBuffer, pn532ack, 6) == 0);
 }
 
 bool Arduino_PN532_SRIX::isReady() {
-    // --- POLLING MODE (No IRQ pin) ---
-    if (_irq == 255) {
-        // Request 1 byte from PN532 (Status Byte)
-        delayMicroseconds(500);
-        Wire.requestFrom((uint8_t)PN532_I2C_ADDRESS, (uint8_t)1);
-
-        // If no response or bus locked, assume not ready
-        if (!Wire.available()) {
-#ifdef SRIX_LIB_DEBUG
-            Serial.println("[PN532] isReady: No response from I2C (bus busy or chip offline)");
-#endif
-            return false;
-        }
-
-        // Read status byte
-        uint8_t status = Wire.read();
-
-#ifdef SRIX_LIB_DEBUG
-        Serial.print("[PN532] Status byte: 0x");
-        if(status < 0x10) Serial.print("0");
-        Serial.print(status, HEX);
-        Serial.print(" -> ");
-        Serial.println((status & 0x01) ? "READY" : "BUSY");
-#endif
-
-        // Check Bit 0 (LSB):
-        // 1 = Ready
-        // 0 = Busy
-        return (status & 0x01);
-    }
-
-    // --- IRQ MODE (Hardware pin) ---
-    // IRQ pin goes LOW when chip is ready
-    bool ready = (digitalRead(_irq) == LOW);
-
-#ifdef SRIX_LIB_DEBUG
-    Serial.print("[PN532] IRQ pin ");
-    Serial.print(_irq);
-    Serial.print(": ");
-    Serial.println(ready ? "LOW (Ready)" : "HIGH (Busy)");
-#endif
-
-    return ready;
+    if (_irq == 255) return true; // Polling mode
+    return (digitalRead(_irq) == LOW);
 }
 
 bool Arduino_PN532_SRIX::waitReady(uint16_t timeout) {
@@ -159,7 +98,7 @@ bool Arduino_PN532_SRIX::waitReady(uint16_t timeout) {
         }
         delay(10);
     }
-    SRIX_LIB_LOG("Ready from waitReady");
+
     return true;
 }
 
@@ -171,7 +110,7 @@ void Arduino_PN532_SRIX::writeCommand(uint8_t *command, uint8_t commandLength) {
 
     Wire.beginTransmission(PN532_I2C_ADDRESS);
 
-    checksum = PN532_PREAMBLE + PN532_STARTCODE1 + PN532_STARTCODE2;
+    checksum = PN532_PREAMBLE + PN532_PREAMBLE + PN532_STARTCODE2;
     Wire.write(PN532_PREAMBLE);
     Wire.write(PN532_STARTCODE1);
     Wire.write(PN532_STARTCODE2);
@@ -193,27 +132,12 @@ void Arduino_PN532_SRIX::writeCommand(uint8_t *command, uint8_t commandLength) {
     Wire.endTransmission();
 }
 
-bool Arduino_PN532_SRIX::sendCommandCheckAck(uint8_t *command, uint8_t commandLenght, uint16_t timeout) {
-    // default timeout of one second
-    // write the command
-    writeCommand(command, commandLenght);
+bool Arduino_PN532_SRIX::sendCommandCheckAck(uint8_t *command, uint8_t commandLength, uint16_t timeout) {
+    writeCommand(command, commandLength);
 
-    // Wait for chip to say its ready!
-    if (!waitReady(timeout)) { return false; }
+    if (!waitReady(timeout)) return false;
 
-#ifdef SRIX_LIB_DEBUG
-    Serial.println(F("\nI2C IRQ received"));
-#endif
-
-    // Check acknowledgement
-    if (!readACK()) {
-#ifdef SRIX_LIB_DEBUG
-        Serial.println(F("\nNo ACK frame received!"));
-#endif
-        return false;
-    }
-
-    return true; // ACK is valid
+    return readACK();
 }
 
 // ========== PN532 GENERIC FUNCTIONS ==========
@@ -260,53 +184,141 @@ bool Arduino_PN532_SRIX::SRIX_init() {
 }
 
 bool Arduino_PN532_SRIX::SRIX_initiate_select() {
-    uint8_t chip_id;
+    uint8_t chip_id = 0;
+    bool initiate_success = false;
+    
+    // ==================== INITIATE with retry ====================
+    for (uint8_t retry = 0; retry < SRIX4K_INITIATE_RETRIES && !initiate_success; retry++) {
+        // Small delay before retry (except first attempt)
+        if (retry > 0) {
+            delay(SRIX4K_RETRY_DELAY_MS);
+        }
+        
+        // Try standard INITIATE first
+        _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
+        _packetbuffer[1] = SRIX4K_INITIATE;
+        _packetbuffer[2] = 0x00;  // Standard INITIATE
 
-    // INITIATE
-    _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
-    _packetbuffer[1] = SRIX4K_INITIATE;
-    _packetbuffer[2] = 0x00;
+        bool ack_received = sendCommandCheckAck(_packetbuffer, 3, SRIX4K_INITIATE_TIMEOUT_MS);
+        
+        // On ACK failure, try PCALL16 variant on odd retry attempts (alternating strategy)
+        if (!ack_received && (retry % 2 == 1)) {
+            _packetbuffer[2] = SRIX4K_PCALL16_DATA;  // Try PCALL16 variant
+            ack_received = sendCommandCheckAck(_packetbuffer, 3, SRIX4K_INITIATE_TIMEOUT_MS);
+        }
+        
+        if (!ack_received) {
+            continue;
+        }
 
-    if (!sendCommandCheckAck(_packetbuffer, 3)) return false;
+        // Wait for response
+        delay(SRIX4K_RF_SETTLE_DELAY_MS);
+        
+        // Read response
+        readData(_packetbuffer, 10);
 
-    readData(_packetbuffer, 10);
+        if (_packetbuffer[7] == PN532_RESPONSE_OK) {
+            chip_id = _packetbuffer[8];
+            initiate_success = true;
+        }
+        // Also accept timeout with valid chip_id (some tags behave this way)
+        else if (_packetbuffer[7] == PN532_RESPONSE_TIMEOUT && _packetbuffer[8] != SRIX4K_INVALID_CHIP_ID) {
+            chip_id = _packetbuffer[8];
+            initiate_success = true;
+        }
+    }
 
-    if (_packetbuffer[7] != 0x00) return false;
+    if (!initiate_success) {
+#ifdef PN532_SRIX_DEBUG
+        PN532_DEBUG_PRINT.println(F("INITIATE failed after all retries"));
+#endif
+        return false;
+    }
 
-    chip_id = _packetbuffer[8];
+    // Delay between INITIATE and SELECT
+    delay(SRIX4K_COMMAND_DELAY_MS);
 
-    // SELECT
-    _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
-    _packetbuffer[1] = SRIX4K_SELECT;
-    _packetbuffer[2] = chip_id;
+    // ==================== SELECT with retry ====================
+    for (uint8_t retry = 0; retry < SRIX4K_SELECT_RETRIES; retry++) {
+        if (retry > 0) {
+            delay(SRIX4K_RETRY_DELAY_MS);
+        }
+        
+        _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
+        _packetbuffer[1] = SRIX4K_SELECT;
+        _packetbuffer[2] = chip_id;
 
-    if (!sendCommandCheckAck(_packetbuffer, 3)) return false;
+        if (!sendCommandCheckAck(_packetbuffer, 3, SRIX4K_SELECT_TIMEOUT_MS)) {
+            continue;
+        }
 
-    readData(_packetbuffer, 10);
+        delay(SRIX4K_RF_SETTLE_DELAY_MS);
+        
+        readData(_packetbuffer, 10);
 
-    return (_packetbuffer[7] == 0x00);
+        if (_packetbuffer[7] == PN532_RESPONSE_OK) {
+#ifdef PN532_SRIX_DEBUG
+            PN532_DEBUG_PRINT.print(F("SELECT success, chip_id: 0x"));
+            PN532_DEBUG_PRINT.println(chip_id, HEX);
+#endif
+            return true;
+        }
+    }
+
+#ifdef PN532_SRIX_DEBUG
+    PN532_DEBUG_PRINT.println(F("SELECT failed after all retries"));
+#endif
+    return false;
 }
 
 bool Arduino_PN532_SRIX::SRIX_read_block(uint8_t address, uint8_t *block) {
-    _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
-    _packetbuffer[1] = SRIX4K_READBLOCK;
-    _packetbuffer[2] = address;
+    for (uint8_t retry = 0; retry < SRIX4K_READ_RETRIES; retry++) {
+        if (retry > 0) {
+            delay(SRIX4K_RETRY_DELAY_MS);
+            // Re-select tag if retry needed
+            if (!SRIX_initiate_select()) {
+                continue;
+            }
+        }
+        
+        _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
+        _packetbuffer[1] = SRIX4K_READBLOCK;
+        _packetbuffer[2] = address;
 
-    if (!sendCommandCheckAck(_packetbuffer, 3)) return false;
+        if (!sendCommandCheckAck(_packetbuffer, 3, SRIX4K_SELECT_TIMEOUT_MS)) {
+            continue;
+        }
 
-    readData(_packetbuffer, 13);
+        delay(SRIX4K_RF_SETTLE_DELAY_MS);
+        
+        readData(_packetbuffer, 13);
 
-    if (_packetbuffer[7] != 0x00) return false;
+        if (_packetbuffer[7] == PN532_RESPONSE_OK) {
+            block[0] = _packetbuffer[8];
+            block[1] = _packetbuffer[9];
+            block[2] = _packetbuffer[10];
+            block[3] = _packetbuffer[11];
+            return true;
+        }
+    }
 
-    block[0] = _packetbuffer[8];
-    block[1] = _packetbuffer[9];
-    block[2] = _packetbuffer[10];
-    block[3] = _packetbuffer[11];
-
-    return true;
+#ifdef PN532_SRIX_DEBUG
+    PN532_DEBUG_PRINT.print(F("READ_BLOCK failed for address 0x"));
+    PN532_DEBUG_PRINT.println(address, HEX);
+#endif
+    return false;
 }
 
 bool Arduino_PN532_SRIX::SRIX_write_block(uint8_t address, uint8_t *block) {
+    // SRIX4K Write - Corrected protocol handling
+    // CRITICAL: SRIX4K tags DO NOT respond to WRITE commands!
+    // PN532 timeout (0x01) is EXPECTED behavior, not an error.
+    
+    DEBUG_PRINT("SRIX_write_block: Starting write to block 0x");
+    DEBUG_PRINTHEX(address);
+    DEBUG_PRINTLN("");
+    
+    // Step 1: Send WRITE command
     _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
     _packetbuffer[1] = SRIX4K_WRITEBLOCK;
     _packetbuffer[2] = address;
@@ -314,25 +326,116 @@ bool Arduino_PN532_SRIX::SRIX_write_block(uint8_t address, uint8_t *block) {
     _packetbuffer[4] = block[1];
     _packetbuffer[5] = block[2];
     _packetbuffer[6] = block[3];
+    
+    if (!sendCommandCheckAck(_packetbuffer, 7, SRIX4K_WRITE_COMMAND_TIMEOUT_MS)) {
+        DEBUG_PRINTLN("SRIX_write_block: ACK failed");
+        return false;
+    }
+    
+    DEBUG_PRINTLN("SRIX_write_block: ACK received");
+    
+    // Step 2: Read PN532 response (clear buffer)
+    // CRITICAL: Response will be 0x01 (timeout) which is EXPECTED!
+    if (waitReady(SRIX4K_WRITE_BUFFER_CLEAR_TIMEOUT_MS)) {
+        readData(_packetbuffer, 10);
+        uint8_t response = _packetbuffer[7];
+        
+        DEBUG_PRINT("SRIX_write_block: PN532 response = 0x");
+        DEBUG_PRINTHEX(response);
+        DEBUG_PRINTLN("");
+        
+        // Accept both OK and TIMEOUT as valid responses
+        // TIMEOUT is the expected response for SRIX4K!
+        if (response != PN532_RESPONSE_OK && response != PN532_RESPONSE_TIMEOUT) {
+            DEBUG_PRINTLN("SRIX_write_block: Unexpected RF error");
+            return false;  // Real RF error
+        }
+    }
+    
+    // Step 3: Wait for EEPROM programming (datasheet: 5ms typical, 10ms max)
+    DEBUG_PRINTLN("SRIX_write_block: Waiting for EEPROM programming");
+    delay(SRIX4K_WRITE_TIME_MS);
+    
+    // Step 4: Re-initiate and select tag for next operation
+    DEBUG_PRINTLN("SRIX_write_block: Re-selecting tag for next operation");
+    bool success = SRIX_initiate_select();
+    
+    if (success) {
+        DEBUG_PRINTLN("SRIX_write_block: SUCCESS - Write completed, tag ready");
+    } else {
+        DEBUG_PRINTLN("SRIX_write_block: Write successful, but tag re-select failed (next op may need retry)");
+    }
+    
+    return success;
+}
 
-    if (!sendCommandCheckAck(_packetbuffer, 7)) {
-        SRIX_LIB_LOG("[SRIX_LIB] Write FAIL");
-        return false; }
-    SRIX_LIB_LOG("[SRIX_LIB] Write OK");
-    return true;
+bool Arduino_PN532_SRIX::SRIX_write_block_no_verify(uint8_t address, uint8_t *block) {
+    // Fast write without verification - for speed-critical applications
+    
+    DEBUG_PRINTLN("SRIX_write_block_no_verify: Starting fast write");
+    
+    // Send WRITE command
+    _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
+    _packetbuffer[1] = SRIX4K_WRITEBLOCK;
+    _packetbuffer[2] = address;
+    _packetbuffer[3] = block[0];
+    _packetbuffer[4] = block[1];
+    _packetbuffer[5] = block[2];
+    _packetbuffer[6] = block[3];
+    
+    // Check ACK from PN532
+    if (!sendCommandCheckAck(_packetbuffer, 7, SRIX4K_WRITE_COMMAND_TIMEOUT_MS)) {
+        DEBUG_PRINTLN("SRIX_write_block_no_verify: ACK failed");
+        return false;
+    }
+    
+    // Read PN532 response to clear buffer (ignore status - timeout is expected)
+    if (waitReady(SRIX4K_WRITE_BUFFER_CLEAR_TIMEOUT_MS)) {
+        readData(_packetbuffer, 10);
+    }
+    
+    // Wait for EEPROM programming time
+    delay(SRIX4K_WRITE_TIME_MS);
+    
+    // Re-initiate and select tag for next operation
+    bool success = SRIX_initiate_select();
+    
+    if (success) {
+        DEBUG_PRINTLN("SRIX_write_block_no_verify: Complete (unverified)");
+    } else {
+        DEBUG_PRINTLN("SRIX_write_block_no_verify: Re-select failed");
+    }
+    
+    return success;
 }
 
 bool Arduino_PN532_SRIX::SRIX_get_uid(uint8_t *buffer) {
-    _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
-    _packetbuffer[1] = SRIX4K_GETUID;
+    for (uint8_t retry = 0; retry < SRIX4K_UID_RETRIES; retry++) {
+        if (retry > 0) {
+            delay(SRIX4K_RETRY_DELAY_MS);
+        }
+        
+        _packetbuffer[0] = PN532_COMMAND_INCOMMUNICATETHRU;
+        _packetbuffer[1] = SRIX4K_GETUID;
 
-    if (!sendCommandCheckAck(_packetbuffer, 2)) return false;
+        if (!sendCommandCheckAck(_packetbuffer, 2, SRIX4K_SELECT_TIMEOUT_MS)) {
+            continue;
+        }
 
-    readData(_packetbuffer, 16);
+        delay(SRIX4K_RF_SETTLE_DELAY_MS);
+        
+        readData(_packetbuffer, 16);
 
-    if (_packetbuffer[7] != 0x00) return false;
+        if (_packetbuffer[7] == PN532_RESPONSE_OK) {
+            for (int i = 0; i < 8; i++) {
+                buffer[i] = _packetbuffer[8 + i];
+            }
+            return true;
+        }
+    }
 
-    for (int i = 0; i < 8; i++) { buffer[i] = _packetbuffer[8 + i]; }
-
-    return true;
+#ifdef PN532_SRIX_DEBUG
+    PN532_DEBUG_PRINT.println(F("GET_UID failed after all retries"));
+#endif
+    return false;
 }

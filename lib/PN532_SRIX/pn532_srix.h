@@ -1,50 +1,75 @@
 /*
  * This file is part of arduino-pn532-srix.
- * arduino-pn532-srix is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * arduino-pn532-srix is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- * You should have received a copy of the GNU General Public License
- * along with arduino-pn532-srix.  If not, see <http://www.gnu.org/licenses/>.
- *
  * @author Lilz
- * @license  GNU Lesser General Public License v3.0 (see license.txt)
- *  Refactored by Senape3000 to reuse Adafruit_PN532 constants only (v1.2)
- *  This is a library for the communication with an I2C PN532 NFC/RFID breakout board.
- *  adapted from Adafruit's library.
- *  This library supports only I2C to communicate.
+ * @license GNU Lesser General Public License v3.0
+ * Refactored by Senape3000, Fixed by andreaguidi73
  */
 
 #ifndef PN532_SRIX_H
 #define PN532_SRIX_H
 
-#include <Adafruit_PN532.h> // Only for constants (#define)
 #include <Arduino.h>
 #include <Wire.h>
 
-// Uncomment to enable verbose debug output on Serial
-// #define SRIX_LIB_DEBUG
-
-// Helper macro for debug
-#ifdef SRIX_LIB_DEBUG
-    #define SRIX_LIB_LOG(...) Serial.printf(__VA_ARGS__); Serial.println()
-    #define SRIX_LIB_PRINT(...) Serial.print(__VA_ARGS__)
-#else
-    #define SRIX_LIB_LOG(...) 
-    #define SRIX_LIB_PRINT(...) 
+// DEBUG SETTINGS (uncomment to enable)
+// #define PN532_SRIX_DEBUG
+#ifdef PN532_SRIX_DEBUG
+    #define PN532_DEBUG_PRINT Serial
 #endif
 
-// SRIX4K-specific commands
-#define SRIX4K_INITIATE (0x06)
-#define SRIX4K_SELECT (0x0E)
-#define SRIX4K_READBLOCK (0x08)
-#define SRIX4K_WRITEBLOCK (0x09)
-#define SRIX4K_GETUID (0x0B)
+// PN532 COMMANDS (no external dependency)
+#define PN532_COMMAND_GETFIRMWAREVERSION    (0x02)
+#define PN532_COMMAND_SAMCONFIGURATION      (0x14)
+#define PN532_COMMAND_RFCONFIGURATION       (0x32)
+#define PN532_COMMAND_INLISTPASSIVETARGET   (0x4A)
+#define PN532_COMMAND_INCOMMUNICATETHRU     (0x42)
+
+// PN532 I2C PROTOCOL CONSTANTS
+#define PN532_I2C_ADDRESS   (0x48 >> 1)
+#define PN532_PREAMBLE      (0x00)
+#define PN532_STARTCODE1    (0x00)
+#define PN532_STARTCODE2    (0xFF)
+#define PN532_POSTAMBLE     (0x00)
+#define PN532_HOSTTOPN532   (0xD4)
+#define PN532_PN532TOHOST   (0xD5)
+
+// PN532 RESPONSE CODES
+#define PN532_RESPONSE_OK           (0x00)  // Success
+#define PN532_RESPONSE_TIMEOUT      (0x01)  // Timeout (EXPECTED for SRIX4K WRITE!)
+#define PN532_RESPONSE_CRC_ERROR    (0x02)
+#define PN532_RESPONSE_PARITY_ERROR (0x03)
+#define PN532_RESPONSE_COLLISION    (0x06)
+#define PN532_RESPONSE_RF_FIELD_OFF (0x0A)
+#define PN532_RESPONSE_RF_PROTOCOL  (0x0B)
+
+// SRIX4K COMMANDS
+#define SRIX4K_INITIATE     (0x06)
+#define SRIX4K_SELECT       (0x0E)
+#define SRIX4K_READBLOCK    (0x08)
+#define SRIX4K_WRITEBLOCK   (0x09)
+#define SRIX4K_GETUID       (0x0B)
+
+// SRIX4K TIMING CONSTANTS - Increased for better compatibility
+#define SRIX4K_WRITE_TIME_MS                 (10)    // EEPROM programming time
+#define SRIX4K_WRITE_COMMAND_TIMEOUT_MS      (200)   // Increased from 150
+#define SRIX4K_WRITE_BUFFER_CLEAR_TIMEOUT_MS (150)   // Increased from 100
+#define SRIX4K_WRITE_MAX_RETRIES             (3)
+
+// NEW: Timing for INITIATE/SELECT - Critical for tag compatibility
+#define SRIX4K_INITIATE_TIMEOUT_MS           (250)   // Timeout for INITIATE command
+#define SRIX4K_SELECT_TIMEOUT_MS             (250)   // Timeout for SELECT command
+#define SRIX4K_INITIATE_RETRIES              (5)     // Retry attempts for INITIATE
+#define SRIX4K_SELECT_RETRIES                (3)     // Retry attempts for SELECT
+#define SRIX4K_READ_RETRIES                  (3)     // Retry attempts for READ_BLOCK
+#define SRIX4K_UID_RETRIES                   (3)     // Retry attempts for GET_UID
+#define SRIX4K_COMMAND_DELAY_MS              (15)    // Delay between commands
+#define SRIX4K_RETRY_DELAY_MS                (20)    // Delay between retries
+#define SRIX4K_RF_SETTLE_DELAY_MS            (5)     // RF field settle time
+
+// NEW: Alternative INITIATE command for problematic tags
+#define SRIX4K_PCALL16                       (0x06)  // PCALL16 command (same opcode, different data)
+#define SRIX4K_PCALL16_DATA                  (0x04)  // Data byte for PCALL16 (vs 0x00 for INITIATE)
+#define SRIX4K_INVALID_CHIP_ID               (0x00)  // Invalid chip ID value
 
 class Arduino_PN532_SRIX {
 public:
@@ -59,13 +84,13 @@ public:
     bool SRIX_initiate_select();
     bool SRIX_read_block(uint8_t address, uint8_t *block);
     bool SRIX_write_block(uint8_t address, uint8_t *block);
+    bool SRIX_write_block_no_verify(uint8_t address, uint8_t *block);
     bool SRIX_get_uid(uint8_t *buffer);
 
 private:
     uint8_t _irq, _reset;
     uint8_t _packetbuffer[64];
 
-    // Low-level I2C functions (reimplemented from original)
     bool SAMConfig();
     void readData(uint8_t *buffer, uint8_t n);
     bool readACK();
