@@ -31,6 +31,12 @@ void BLESerialService::setup(NimBLEServer *pServer) {
 
 void BLESerialService::end() { delete callbacks; }
 
+int BLESerialService::read() {
+    std::string value = serial_char->getValue();
+    if (value.empty()) return -1;
+    return (int)(unsigned char)value[0];
+}
+
 int BLESerialService::available() {
     if (!newValue) return 0;
     newValue = false;
